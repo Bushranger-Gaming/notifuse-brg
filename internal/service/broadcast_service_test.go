@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -797,6 +798,339 @@ func TestBroadcastService_UpdateBroadcast_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	assert.Equal(t, req.Name, updated.Name)
+}
+
+func TestBroadcastService_VariationSenderValidation(t *testing.T) {
+	sender := domain.EmailSender{ID: "sender-1", Email: "one@example.com", Name: "One", IsDefault: true}
+	marketing := &domain.Workspace{
+		ID:       "w1",
+		Settings: domain.WorkspaceSettings{MarketingEmailProviderID: "mkt"},
+		Integrations: domain.Integrations{
+			{ID: "mkt", Type: domain.IntegrationTypeEmail, EmailProvider: domain.EmailProvider{Kind: domain.EmailProviderKindSMTP, Senders: []domain.EmailSender{sender}}},
+		},
+	}
+	noProvider := &domain.Workspace{ID: "w1"}
+
+	tests := []struct {
+		name      string
+		senderID  string
+		workspace *domain.Workspace
+		wantErr   string
+	}{
+		{name: "sender of the marketing provider is accepted", senderID: sender.ID, workspace: marketing},
+		{name: "unknown sender is rejected naming the sender", senderID: "sender-gone", workspace: marketing, wantErr: "sender-gone"},
+		{name: "sender is rejected when no marketing provider is configured", senderID: sender.ID, workspace: noProvider, wantErr: "no marketing email provider"},
+	}
+
+	for _, tt := range tests {
+		variations := []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tplA", SenderID: tt.senderID}}
+
+		t.Run("create: "+tt.name, func(t *testing.T) {
+			d := setupBroadcastSvc(t)
+			defer d.ctrl.Finish()
+
+			ctx := context.Background()
+			req := &domain.CreateBroadcastRequest{
+				WorkspaceID:  "w1",
+				Name:         "My Campaign",
+				Audience:     domain.AudienceSettings{List: "list1", Segments: []string{"seg1"}},
+				TestSettings: domain.BroadcastTestSettings{Variations: variations},
+			}
+			authOK(d.authService, ctx, req.WorkspaceID)
+			d.workspaceRepo.EXPECT().GetByID(ctx, req.WorkspaceID).Return(tt.workspace, nil)
+
+			// A rejected broadcast is never stored: a CreateBroadcast here is an unexpected call
+			if tt.wantErr == "" {
+				d.repo.EXPECT().CreateBroadcast(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, b *domain.Broadcast) error {
+					require.Len(t, b.TestSettings.Variations, 1)
+					assert.Equal(t, tt.senderID, b.TestSettings.Variations[0].SenderID)
+					return nil
+				})
+			}
+
+			created, err := d.svc.CreateBroadcast(ctx, req)
+			if tt.wantErr != "" {
+				var validationErr domain.ValidationError
+				require.ErrorAs(t, err, &validationErr)
+				assert.Contains(t, validationErr.Message, tt.wantErr)
+				assert.Nil(t, created)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, created)
+		})
+
+		t.Run("update: "+tt.name, func(t *testing.T) {
+			d := setupBroadcastSvc(t)
+			defer d.ctrl.Finish()
+
+			ctx := context.Background()
+			req := &domain.UpdateBroadcastRequest{
+				WorkspaceID:  "w1",
+				ID:           "b1",
+				Name:         "Updated Name",
+				Audience:     domain.AudienceSettings{List: "list1", Segments: []string{"seg1"}},
+				Schedule:     domain.ScheduleSettings{IsScheduled: false},
+				TestSettings: domain.BroadcastTestSettings{Variations: variations},
+			}
+			authOK(d.authService, ctx, req.WorkspaceID)
+			d.repo.EXPECT().GetBroadcast(ctx, req.WorkspaceID, req.ID).Return(testBroadcast(req.WorkspaceID, req.ID), nil)
+			d.workspaceRepo.EXPECT().GetByID(ctx, req.WorkspaceID).Return(tt.workspace, nil)
+
+			// A rejected update is never stored: an UpdateBroadcast here is an unexpected call
+			if tt.wantErr == "" {
+				d.repo.EXPECT().UpdateBroadcast(ctx, gomock.Any()).DoAndReturn(func(_ context.Context, b *domain.Broadcast) error {
+					require.Len(t, b.TestSettings.Variations, 1)
+					assert.Equal(t, tt.senderID, b.TestSettings.Variations[0].SenderID)
+					return nil
+				})
+			}
+
+			updated, err := d.svc.UpdateBroadcast(ctx, req)
+			if tt.wantErr != "" {
+				var validationErr domain.ValidationError
+				require.ErrorAs(t, err, &validationErr)
+				assert.Contains(t, validationErr.Message, tt.wantErr)
+				assert.Nil(t, updated)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, updated)
+		})
+	}
+}
+
+// TestBroadcastService_UpdateBroadcast_StoredVariationSender tests that an update checks the
+// senders of the variations it submits and never those already stored: a sender deleted since
+// the broadcast was saved must not block an unrelated edit such as a rename.
+func TestBroadcastService_UpdateBroadcast_StoredVariationSender(t *testing.T) {
+	marketing := &domain.Workspace{
+		ID:       "w1",
+		Settings: domain.WorkspaceSettings{MarketingEmailProviderID: "mkt"},
+		Integrations: domain.Integrations{
+			{ID: "mkt", Type: domain.IntegrationTypeEmail, EmailProvider: domain.EmailProvider{Kind: domain.EmailProviderKindSMTP, Senders: []domain.EmailSender{
+				{ID: "sender-1", Email: "one@example.com", Name: "One", IsDefault: true},
+			}}},
+		},
+	}
+
+	// A stored variation that names a sender the provider no longer has
+	storedBroadcast := func() *domain.Broadcast {
+		b := testBroadcast("w1", "b1")
+		b.TestSettings.Variations = []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tplA", SenderID: "sender-gone"}}
+		return b
+	}
+
+	decode := func(t *testing.T, body string) *domain.UpdateBroadcastRequest {
+		t.Helper()
+		req := &domain.UpdateBroadcastRequest{}
+		require.NoError(t, json.Unmarshal([]byte(body), req))
+		return req
+	}
+
+	t.Run("rename without test_settings succeeds and keeps the stored variation", func(t *testing.T) {
+		d := setupBroadcastSvc(t)
+		defer d.ctrl.Finish()
+
+		ctx := context.Background()
+		req := decode(t, `{"workspace_id":"w1","id":"b1","name":"Renamed"}`)
+		authOK(d.authService, ctx, req.WorkspaceID)
+		d.repo.EXPECT().GetBroadcast(ctx, req.WorkspaceID, req.ID).Return(storedBroadcast(), nil)
+
+		// No workspace lookup is expected: the stored senders are not checked
+		d.repo.EXPECT().UpdateBroadcast(ctx, gomock.Any()).DoAndReturn(func(_ context.Context, b *domain.Broadcast) error {
+			assert.Equal(t, "Renamed", b.Name)
+			require.Len(t, b.TestSettings.Variations, 1)
+			assert.Equal(t, "sender-gone", b.TestSettings.Variations[0].SenderID)
+			return nil
+		})
+
+		updated, err := d.svc.UpdateBroadcast(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, updated)
+		assert.Equal(t, "Renamed", updated.Name)
+	})
+
+	t.Run("rename with test_settings but no variations succeeds", func(t *testing.T) {
+		d := setupBroadcastSvc(t)
+		defer d.ctrl.Finish()
+
+		ctx := context.Background()
+		req := decode(t, `{"workspace_id":"w1","id":"b1","name":"Renamed","test_settings":{"enabled":false}}`)
+		authOK(d.authService, ctx, req.WorkspaceID)
+		d.repo.EXPECT().GetBroadcast(ctx, req.WorkspaceID, req.ID).Return(storedBroadcast(), nil)
+		d.repo.EXPECT().UpdateBroadcast(ctx, gomock.Any()).Return(nil)
+
+		updated, err := d.svc.UpdateBroadcast(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, updated)
+	})
+
+	t.Run("a submitted variation with an unknown sender is rejected", func(t *testing.T) {
+		d := setupBroadcastSvc(t)
+		defer d.ctrl.Finish()
+
+		ctx := context.Background()
+		req := decode(t, `{"workspace_id":"w1","id":"b1","name":"Renamed","test_settings":{"enabled":false,"variations":[{"variation_name":"A","template_id":"tplA","sender_id":"sender-gone"}]}}`)
+		authOK(d.authService, ctx, req.WorkspaceID)
+		d.repo.EXPECT().GetBroadcast(ctx, req.WorkspaceID, req.ID).Return(storedBroadcast(), nil)
+		d.workspaceRepo.EXPECT().GetByID(ctx, req.WorkspaceID).Return(marketing, nil)
+
+		// A rejected update is never stored: an UpdateBroadcast here is an unexpected call
+		updated, err := d.svc.UpdateBroadcast(ctx, req)
+		var validationErr domain.ValidationError
+		require.ErrorAs(t, err, &validationErr)
+		assert.Contains(t, validationErr.Message, "sender-gone")
+		assert.Nil(t, updated)
+	})
+}
+
+func TestBroadcastService_SendToIndividual_VariationSender(t *testing.T) {
+	templateSender := domain.EmailSender{ID: "sender-template", Email: "template@example.com", Name: "Template", IsDefault: true}
+	variationSender := domain.EmailSender{ID: "sender-variation", Email: "variation@example.com", Name: "Variation"}
+
+	tests := []struct {
+		name          string
+		senderID      string
+		wantFromEmail string
+		wantErr       bool
+	}{
+		{name: "variation sender wins over the template sender", senderID: variationSender.ID, wantFromEmail: variationSender.Email},
+		{name: "variation without a sender keeps the template sender", wantFromEmail: templateSender.Email},
+		{name: "missing variation sender fails the send instead of using the default", senderID: "sender-gone", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := setupBroadcastSvc(t)
+			defer d.ctrl.Finish()
+
+			ctx := context.Background()
+			req := &domain.SendToIndividualRequest{WorkspaceID: "w1", BroadcastID: "b1", RecipientEmail: "to@example.com"}
+			authOK(d.authService, ctx, req.WorkspaceID)
+
+			workspace := &domain.Workspace{
+				ID:       "w1",
+				Settings: domain.WorkspaceSettings{MarketingEmailProviderID: "mkt", SecretKey: "sk_test"},
+				Integrations: domain.Integrations{
+					{ID: "mkt", Type: domain.IntegrationTypeEmail, EmailProvider: domain.EmailProvider{Kind: domain.EmailProviderKindSMTP, Senders: []domain.EmailSender{templateSender, variationSender}}},
+				},
+			}
+			d.workspaceRepo.EXPECT().GetByID(ctx, req.WorkspaceID).Return(workspace, nil)
+
+			b := testBroadcast(req.WorkspaceID, req.BroadcastID)
+			b.TestSettings.Variations = []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tplA", SenderID: tt.senderID}}
+			d.repo.EXPECT().GetBroadcast(ctx, req.WorkspaceID, req.BroadcastID).Return(b, nil)
+
+			d.contactRepo.EXPECT().GetContactByEmail(ctx, req.WorkspaceID, req.RecipientEmail).Return(nil, errors.New("not found")).AnyTimes()
+
+			template := &domain.Template{
+				ID:      "tplA",
+				Name:    "Template A",
+				Channel: "email",
+				Email: &domain.EmailTemplate{
+					SenderID:         templateSender.ID,
+					Subject:          "Hello",
+					CompiledPreview:  "<p>preview</p>",
+					VisualEditorTree: createMJMLRootBlock(),
+				},
+				Category:  string(domain.TemplateCategoryMarketing),
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			}
+			d.templateSvc.EXPECT().GetTemplateByID(ctx, req.WorkspaceID, "tplA", int64(0)).Return(template, nil)
+
+			// A missing sender stops the send before it is compiled and sent
+			if !tt.wantErr {
+				compiledHTML := "<html>ok</html>"
+				d.templateSvc.EXPECT().CompileTemplate(ctx, gomock.Any()).Return(&domain.CompileTemplateResponse{Success: true, HTML: &compiledHTML}, nil)
+				d.emailSvc.EXPECT().SendEmail(gomock.Any(), gomock.Any(), true).DoAndReturn(
+					func(_ context.Context, request domain.SendEmailProviderRequest, _ bool) error {
+						assert.Equal(t, tt.wantFromEmail, request.FromAddress)
+						return nil
+					},
+				)
+				d.messageHistoryRepo.EXPECT().Create(gomock.Any(), req.WorkspaceID, gomock.Any(), gomock.Any()).Return(nil)
+			}
+
+			err := d.svc.SendToIndividual(ctx, req)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "failed to get sender")
+				assert.ErrorIs(t, err, domain.ErrSenderNotFound)
+				assert.Contains(t, err.Error(), tt.senderID)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+// The test send of a variation goes through the marketing provider, as the broadcast does, whatever
+// the category of its template and whichever provider is first on the workspace: the console's
+// variation row sends it this way so the test shows what the recipients get.
+func TestBroadcastService_SendToIndividual_UsesMarketingProvider(t *testing.T) {
+	d := setupBroadcastSvc(t)
+	defer d.ctrl.Finish()
+
+	ctx := context.Background()
+	req := &domain.SendToIndividualRequest{WorkspaceID: "w1", BroadcastID: "b1", RecipientEmail: "to@example.com", TemplateID: "tplA"}
+	authOK(d.authService, ctx, req.WorkspaceID)
+
+	transactionalSender := domain.EmailSender{ID: "sender-transactional", Email: "transactional@example.com", Name: "Transactional", IsDefault: true}
+	marketingSender := domain.EmailSender{ID: "sender-marketing", Email: "marketing@example.com", Name: "Marketing", IsDefault: true}
+	variationSender := domain.EmailSender{ID: "sender-variation", Email: "variation@example.com", Name: "Variation"}
+	smtpProvider := func(senders ...domain.EmailSender) domain.EmailProvider {
+		return domain.EmailProvider{Kind: domain.EmailProviderKindSMTP, Senders: senders}
+	}
+
+	workspace := &domain.Workspace{
+		ID: "w1",
+		Settings: domain.WorkspaceSettings{
+			MarketingEmailProviderID:     "mkt",
+			TransactionalEmailProviderID: "trx",
+			SecretKey:                    "sk_test",
+		},
+		Integrations: domain.Integrations{
+			{ID: "trx", Type: domain.IntegrationTypeEmail, EmailProvider: smtpProvider(transactionalSender)},
+			{ID: "mkt", Type: domain.IntegrationTypeEmail, EmailProvider: smtpProvider(marketingSender, variationSender)},
+		},
+	}
+	d.workspaceRepo.EXPECT().GetByID(ctx, req.WorkspaceID).Return(workspace, nil)
+
+	b := testBroadcast(req.WorkspaceID, req.BroadcastID)
+	b.TestSettings.Variations = []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tplA", SenderID: variationSender.ID}}
+	d.repo.EXPECT().GetBroadcast(ctx, req.WorkspaceID, req.BroadcastID).Return(b, nil)
+	d.contactRepo.EXPECT().GetContactByEmail(ctx, req.WorkspaceID, req.RecipientEmail).Return(nil, errors.New("not found")).AnyTimes()
+
+	template := &domain.Template{
+		ID:      "tplA",
+		Name:    "Template A",
+		Channel: "email",
+		Email: &domain.EmailTemplate{
+			SenderID:         transactionalSender.ID,
+			Subject:          "Hello",
+			CompiledPreview:  "<p>preview</p>",
+			VisualEditorTree: createMJMLRootBlock(),
+		},
+		Category:  string(domain.TemplateCategoryTransactional),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	d.templateSvc.EXPECT().GetTemplateByID(ctx, req.WorkspaceID, "tplA", int64(0)).Return(template, nil)
+
+	compiledHTML := "<html>ok</html>"
+	d.templateSvc.EXPECT().CompileTemplate(ctx, gomock.Any()).Return(&domain.CompileTemplateResponse{Success: true, HTML: &compiledHTML}, nil)
+	d.emailSvc.EXPECT().SendEmail(gomock.Any(), gomock.Any(), true).DoAndReturn(
+		func(_ context.Context, request domain.SendEmailProviderRequest, _ bool) error {
+			assert.Equal(t, "mkt", request.IntegrationID, "the marketing provider sends it")
+			assert.Equal(t, variationSender.Email, request.FromAddress, "from the sender of the variation")
+			return nil
+		},
+	)
+	d.messageHistoryRepo.EXPECT().Create(gomock.Any(), req.WorkspaceID, gomock.Any(), gomock.Any()).Return(nil)
+
+	require.NoError(t, d.svc.SendToIndividual(ctx, req))
 }
 
 func TestBroadcastService_ListBroadcasts_WithTemplates(t *testing.T) {

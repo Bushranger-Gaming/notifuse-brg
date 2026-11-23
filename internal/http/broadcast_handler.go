@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -171,6 +172,16 @@ func (h *BroadcastHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// validationMessage is what a rejected request tells its caller: the message of a
+// ValidationError without its "validation error:" prefix, any other error as it is.
+func validationMessage(err error) string {
+	var validationErr domain.ValidationError
+	if errors.As(err, &validationErr) {
+		return validationErr.Message
+	}
+	return err.Error()
+}
+
 // HandleCreate handles the broadcast create request
 func (h *BroadcastHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -187,13 +198,19 @@ func (h *BroadcastHandler) HandleCreate(w http.ResponseWriter, r *http.Request) 
 
 	_, err := req.Validate()
 	if err != nil {
-		WriteJSONError(w, err.Error(), http.StatusBadRequest)
+		WriteJSONError(w, validationMessage(err), http.StatusBadRequest)
 		return
 	}
 
 	broadcast, err := h.service.CreateBroadcast(r.Context(), &req)
 	if err != nil {
 		if writePermissionError(w, err) {
+			return
+		}
+		// The caller's own input, such as a sender the workspace does not have: say why
+		var validationErr domain.ValidationError
+		if errors.As(err, &validationErr) {
+			WriteJSONError(w, validationErr.Message, http.StatusBadRequest)
 			return
 		}
 		h.logger.WithField("error", err.Error()).Error("Failed to create broadcast")
@@ -234,13 +251,18 @@ func (h *BroadcastHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) 
 
 	_, err = req.Validate(existingBroadcast)
 	if err != nil {
-		WriteJSONError(w, err.Error(), http.StatusBadRequest)
+		WriteJSONError(w, validationMessage(err), http.StatusBadRequest)
 		return
 	}
 
 	updatedBroadcast, err := h.service.UpdateBroadcast(r.Context(), &req)
 	if err != nil {
 		if writePermissionError(w, err) {
+			return
+		}
+		var validationErr domain.ValidationError
+		if errors.As(err, &validationErr) {
+			WriteJSONError(w, validationErr.Message, http.StatusBadRequest)
 			return
 		}
 		h.logger.WithField("error", err.Error()).Error("Failed to update broadcast")

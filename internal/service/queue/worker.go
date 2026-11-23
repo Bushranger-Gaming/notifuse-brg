@@ -777,6 +777,28 @@ func (w *EmailQueueWorker) processEntry(workspace *domain.Workspace, integration
 		}
 	}
 
+	// The From of this row was resolved from a sender chosen on a broadcast variation or an
+	// automation step when it was queued. That sender can be deleted while the row waits,
+	// and a retry can send it through another integration than the one that had it: the
+	// provider would still send as the stored address, so the row is refused instead,
+	// permanently — a retry cannot bring the sender back. This is not a provider failure,
+	// so the breaker never hears of it; the probe it may hold is given back by the defer.
+	//
+	// After the stop-on-reply guard, so an entry a reply cancelled is dropped by the guard
+	// and not failed for a sender it was never going to send with, and before the matchable
+	// message_history row below, so a refused row records its failure and nothing else.
+	if entry.Payload.SenderID != "" {
+		if _, err := integration.EmailProvider.ResolveSender(entry.Payload.SenderID, ""); err != nil {
+			w.handleError(workspace, entry, err, &emailerror.ClassifiedError{
+				Original:  err,
+				Type:      emailerror.ErrorTypeUnknown,
+				Provider:  string(integration.EmailProvider.Kind),
+				Retryable: false,
+			})
+			return nil
+		}
+	}
+
 	// Stop-on-reply: persist the matchable message_history row (carrying smtp_message_id)
 	// BEFORE the email physically leaves the provider, so a fast inbound reply (e.g. an
 	// auto-responder) can always resolve via GetBySMTPMessageID even if it arrives in the

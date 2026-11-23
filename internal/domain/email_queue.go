@@ -70,6 +70,12 @@ type EmailQueuePayload struct {
 	Subject     string `json:"subject"`
 	HTMLContent string `json:"html_content"`
 
+	// SenderID is the sender a broadcast variation or an automation step chose in place of
+	// its template's, which FromAddress and FromName were resolved from. The worker sends
+	// the entry only while that sender is still on the provider it sends through. Absent
+	// when there is no override, and on entries queued before it existed.
+	SenderID string `json:"sender_id,omitempty"`
+
 	// Options
 	EmailOptions EmailOptions `json:"email_options"`
 

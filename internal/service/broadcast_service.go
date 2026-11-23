@@ -102,6 +102,11 @@ func (s *BroadcastService) CreateBroadcast(ctx context.Context, request *domain.
 		return nil, err
 	}
 
+	if err := s.validateVariationSenders(ctx, request.WorkspaceID, broadcast.TestSettings.Variations); err != nil {
+		s.logger.Error("Failed to validate broadcast variation senders")
+		return nil, err
+	}
+
 	// Generate a unique ID for the broadcast if not provided
 	if broadcast.ID == "" {
 		// Create a random ID
@@ -135,6 +140,37 @@ func (s *BroadcastService) CreateBroadcast(ctx context.Context, request *domain.
 	s.logger.Info("Broadcast created successfully")
 
 	return broadcast, nil
+}
+
+// validateVariationSenders checks that the sender a variation overrides its template's with
+// exists on the workspace's marketing email provider. The workspace is read only when a
+// variation carries a sender, so broadcasts that never choose one cost no extra lookup.
+func (s *BroadcastService) validateVariationSenders(ctx context.Context, workspaceID string, variations []domain.BroadcastVariation) error {
+	var emailProvider *domain.EmailProvider
+	for i, variation := range variations {
+		if variation.SenderID == "" {
+			continue
+		}
+
+		if emailProvider == nil {
+			workspace, err := s.workspaceRepo.GetByID(ctx, workspaceID)
+			if err != nil {
+				return fmt.Errorf("failed to get workspace: %w", err)
+			}
+			emailProvider, err = workspace.GetEmailProvider(true)
+			if err != nil {
+				return domain.NewValidationError(fmt.Sprintf("variation %d: %v", i+1, err))
+			}
+			if emailProvider == nil {
+				return domain.NewValidationError(fmt.Sprintf("variation %d: sender %s cannot be used, no marketing email provider is configured", i+1, variation.SenderID))
+			}
+		}
+
+		if _, err := emailProvider.ResolveSender(variation.SenderID, ""); err != nil {
+			return domain.NewValidationError(fmt.Sprintf("variation %d: %v", i+1, err))
+		}
+	}
+	return nil
 }
 
 // GetBroadcast retrieves a broadcast by ID
@@ -190,6 +226,14 @@ func (s *BroadcastService) UpdateBroadcast(ctx context.Context, request *domain.
 	updatedBroadcast, err := request.Validate(existingBroadcast)
 	if err != nil {
 		s.logger.Error("Failed to validate broadcast update request")
+		return nil, err
+	}
+
+	// Only the variations this request submits are checked: a request without test_settings
+	// or variations leaves the stored ones alone, and a sender deleted since they were saved
+	// must not block an unrelated edit such as a rename. A missing sender still fails the send.
+	if err := s.validateVariationSenders(ctx, request.WorkspaceID, request.TestSettings.Variations); err != nil {
+		s.logger.Error("Failed to validate broadcast variation senders")
 		return nil, err
 	}
 
@@ -1207,11 +1251,10 @@ func (s *BroadcastService) SendToIndividual(ctx context.Context, request *domain
 		return fmt.Errorf("email content not available after language resolution")
 	}
 
-	emailSender := emailProvider.GetSender(emailContent.SenderID)
-
-	if emailSender == nil {
+	emailSender, err := emailProvider.ResolveSender(variation.SenderID, emailContent.SenderID)
+	if err != nil {
 		s.logger.Error("Failed to get sender for broadcast")
-		return fmt.Errorf("failed to get sender for broadcast")
+		return fmt.Errorf("failed to get sender for broadcast: %w", err)
 	}
 
 	messageID := uuid.New().String()

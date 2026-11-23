@@ -1345,6 +1345,107 @@ func TestEmailProvider_GetSender_Behavior(t *testing.T) {
 	assert.Nil(t, empty.GetSender(""))
 }
 
+func TestEmailProvider_ResolveSender(t *testing.T) {
+	defaultSender := EmailSender{ID: "id-default", Email: "default@example.com", Name: "Default", IsDefault: true}
+	otherSender := EmailSender{ID: "id-1", Email: "one@example.com", Name: "One", IsDefault: false}
+	thirdSender := EmailSender{ID: "id-2", Email: "two@example.com", Name: "Two", IsDefault: false}
+
+	tests := []struct {
+		name             string
+		senders          []EmailSender
+		overrideSenderID string
+		templateSenderID string
+		wantSenderID     string
+		wantErrNotFound  bool
+		wantErr          string
+	}{
+		{
+			name:             "override found wins over the template sender",
+			senders:          []EmailSender{defaultSender, otherSender, thirdSender},
+			overrideSenderID: "id-2",
+			templateSenderID: "id-1",
+			wantSenderID:     "id-2",
+		},
+		{
+			name:             "override found wins over the default sender",
+			senders:          []EmailSender{defaultSender, otherSender},
+			overrideSenderID: "id-1",
+			wantSenderID:     "id-1",
+		},
+		{
+			name:             "override missing returns ErrSenderNotFound and does not fall back to the template sender",
+			senders:          []EmailSender{defaultSender, otherSender},
+			overrideSenderID: "id-gone",
+			templateSenderID: "id-1",
+			wantErrNotFound:  true,
+			wantErr:          "id-gone",
+		},
+		{
+			name:             "override missing does not fall back to the default sender",
+			senders:          []EmailSender{defaultSender, otherSender},
+			overrideSenderID: "id-gone",
+			wantErrNotFound:  true,
+			wantErr:          "id-gone",
+		},
+		{
+			name:             "override missing with no senders at all",
+			overrideSenderID: "id-gone",
+			wantErrNotFound:  true,
+			wantErr:          "id-gone",
+		},
+		{
+			name:             "empty override uses the template sender",
+			senders:          []EmailSender{defaultSender, otherSender},
+			templateSenderID: "id-1",
+			wantSenderID:     "id-1",
+		},
+		{
+			name:             "empty override and unknown template sender uses the default",
+			senders:          []EmailSender{defaultSender, otherSender},
+			templateSenderID: "id-unknown",
+			wantSenderID:     "id-default",
+		},
+		{
+			name:         "empty override and empty template sender uses the default",
+			senders:      []EmailSender{defaultSender, otherSender},
+			wantSenderID: "id-default",
+		},
+		{
+			name:    "empty override and no senders at all is an error",
+			wantErr: "no sender configured",
+		},
+		{
+			name:    "empty override with no default sender and an unknown template sender is an error",
+			senders: []EmailSender{otherSender},
+			wantErr: "no sender configured",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := &EmailProvider{Senders: tt.senders}
+
+			sender, err := ep.ResolveSender(tt.overrideSenderID, tt.templateSenderID)
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Nil(t, sender)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				if tt.wantErrNotFound {
+					assert.ErrorIs(t, err, ErrSenderNotFound)
+				} else {
+					assert.NotErrorIs(t, err, ErrSenderNotFound)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, sender)
+			assert.Equal(t, tt.wantSenderID, sender.ID)
+		})
+	}
+}
+
 func TestSendEmailRequest_Validate_Cases(t *testing.T) {
 	validContact := &Contact{Email: "user@example.com"}
 	validProvider := &EmailProvider{Kind: EmailProviderKindSMTP, SMTP: &SMTPSettings{Host: "smtp.example.com", Port: 25, Username: "u"}}

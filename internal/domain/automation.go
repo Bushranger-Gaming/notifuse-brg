@@ -641,6 +641,7 @@ type EmailNodeConfig struct {
 	NodeConfigDescription
 	TemplateID      string  `json:"template_id"`
 	IntegrationID   *string `json:"integration_id,omitempty"`
+	SenderID        *string `json:"sender_id,omitempty"` // Overrides the template's sender
 	SubjectOverride *string `json:"subject_override,omitempty"`
 	FromOverride    *string `json:"from_override,omitempty"`
 }

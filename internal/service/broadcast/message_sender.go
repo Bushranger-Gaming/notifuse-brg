@@ -368,16 +368,19 @@ func (s *messageSender) SendToRecipient(ctx context.Context, workspaceID string,
 		return NewBroadcastError(ErrCodeTemplateCompile, errMsg, true, nil)
 	}
 
-	emailSender := emailProvider.GetSender(emailContent.SenderID)
-
-	if emailSender == nil {
+	// The sender override is the one of the variation that carries the template
+	senderID := broadcast.SenderIDForTemplate(template.ID)
+	emailSender, err := emailProvider.ResolveSender(senderID, emailContent.SenderID)
+	if err != nil {
 		s.logger.WithFields(map[string]interface{}{
 			"broadcast_id": broadcast.ID,
 			"workspace_id": workspaceID,
 			"sender_id":    emailContent.SenderID,
+			"override_id":  senderID,
 			"recipient":    email,
+			"error":        err.Error(),
 		}).Error("Sender not found")
-		return NewBroadcastError(ErrCodeSenderNotFound, "sender not found", true, nil)
+		return NewBroadcastError(ErrCodeSenderNotFound, "sender not found", true, err)
 	}
 
 	// Process subject line through Liquid templating if it contains Liquid tags
@@ -524,6 +527,18 @@ func (s *messageSender) SendBatch(ctx context.Context, workspaceID string, integ
 	// Ensure UTM parameters is non-nil for downstream usage
 	if broadcast.UTMParameters == nil {
 		broadcast.UTMParameters = &domain.UTMParameters{}
+	}
+
+	// A variation whose sender is gone pauses the broadcast before any recipient is sent: found
+	// on a later recipient, the ones before it would have gone out without being recorded as
+	// progress and be sent again on resume
+	if err := checkVariationSenders(broadcast, emailProvider); err != nil {
+		s.logger.WithFields(map[string]interface{}{
+			"broadcast_id": broadcastID,
+			"workspace_id": workspaceID,
+			"error":        err.Error(),
+		}).Error("Variation sender not found, pausing broadcast")
+		return 0, 0, err
 	}
 
 	// Log rate limiting configuration for this broadcast

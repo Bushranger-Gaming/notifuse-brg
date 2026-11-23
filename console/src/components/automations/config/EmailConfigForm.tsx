@@ -27,24 +27,56 @@ export const EmailConfigForm: React.FC<EmailConfigFormProps> = ({
     onChange({ ...config, template_id: templateId || '' })
   }
 
+  // The senders a node can pick from are those of the provider it sends through: the
+  // integration chosen on the node, or the marketing provider the workspace default stands for.
+  const getSenders = (integrationId?: string) => {
+    const providerId = integrationId || workspace.settings.marketing_email_provider_id
+    return (
+      workspace.integrations?.find((integration) => integration.id === providerId)
+        ?.email_provider?.senders ?? []
+    )
+  }
+
   const handleIntegrationChange = (value: string) => {
+    // A sender belongs to one provider: it only stays while the new integration lists it
+    const senderStays = getSenders(value).some((sender) => sender.id === config.sender_id)
+    const { integration_id, sender_id, ...rest } = config
+    void integration_id
+    const next = senderStays ? { ...rest, sender_id } : rest
     if (value === '') {
       // "Use workspace default" selected — remove override
-      const { integration_id, ...rest } = config
-      void integration_id
+      onChange(next)
+    } else {
+      onChange({ ...next, integration_id: value })
+    }
+  }
+
+  const handleSenderChange = (value: string) => {
+    if (value === '') {
+      // "Template sender" selected — remove override
+      const { sender_id, ...rest } = config
+      void sender_id
       onChange(rest)
     } else {
-      onChange({ ...config, integration_id: value })
+      onChange({ ...config, sender_id: value })
     }
   }
 
   const emailIntegrations = React.useMemo(
     () =>
-      workspace?.integrations?.filter(
+      workspace.integrations?.filter(
         (integration) => integration.type === 'email' && integration.email_provider?.kind
       ) || [],
-    [workspace?.integrations]
+    [workspace.integrations]
   )
+
+  const senderOptions = [
+    { value: '', label: t`Template sender` },
+    ...getSenders(config.integration_id).map((sender) => ({
+      value: sender.id,
+      label: `${sender.name} <${sender.email}>`
+    }))
+  ]
 
   const renderIntegrationOption = (integration: (typeof emailIntegrations)[number]) => {
     const providerKind = integration.email_provider?.kind
@@ -76,19 +108,33 @@ export const EmailConfigForm: React.FC<EmailConfigFormProps> = ({
       </Form.Item>
 
       {emailIntegrations.length > 0 && (
-        <Form.Item
-          label={t`Email Integration`}
-          extra={t`Override the workspace default email provider for this node`}
-        >
-          <Select
-            className="w-full"
-            value={config.integration_id || ''}
-            onChange={handleIntegrationChange}
+        <>
+          <Form.Item
+            label={t`Email Integration`}
+            extra={t`Override the workspace default email provider for this node`}
           >
-            <Option value="">{t`Use workspace default`}</Option>
-            {emailIntegrations.map(renderIntegrationOption)}
-          </Select>
-        </Form.Item>
+            <Select
+              className="w-full"
+              value={config.integration_id || ''}
+              onChange={handleIntegrationChange}
+            >
+              <Option value="">{t`Use workspace default`}</Option>
+              {emailIntegrations.map(renderIntegrationOption)}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            label={t`Sender`}
+            extra={t`Override the sender of the template for this node`}
+          >
+            <Select
+              className="w-full"
+              value={config.sender_id || ''}
+              onChange={handleSenderChange}
+              options={senderOptions}
+            />
+          </Form.Item>
+        </>
       )}
     </Form>
   )

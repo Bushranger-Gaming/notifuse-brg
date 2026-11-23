@@ -3271,6 +3271,326 @@ func TestProcessBroadcastTask_RecipientFeedFailure_NotMarkedAsFailed(t *testing.
 	assert.True(t, errors.Is(err, broadcast.ErrBroadcastShouldPause))
 }
 
+// A variation whose sender was deleted fails every recipient it is sent to. The send
+// returns ErrBroadcastShouldPause for it, and the orchestrator must stop on that — the
+// broadcast paused with the sender named in its reason, no progress recorded — rather than
+// carry on to a processed broadcast with nothing enqueued.
+func TestProcessBroadcastTask_VariationSenderMissing_PausesBroadcast(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockMessageSender := mocks.NewMockMessageSender(ctrl)
+	mockBroadcastRepo := domainmocks.NewMockBroadcastRepository(ctrl)
+	mockTemplateRepo := domainmocks.NewMockTemplateRepository(ctrl)
+	mockContactRepo := domainmocks.NewMockContactRepository(ctrl)
+	mockTaskRepo := domainmocks.NewMockTaskRepository(ctrl)
+	mockWorkspaceRepo := domainmocks.NewMockWorkspaceRepository(ctrl)
+	mockLogger := pkgmocks.NewMockLogger(ctrl)
+	mockTimeProvider := mocks.NewMockTimeProvider(ctrl)
+	mockEventBus := domainmocks.NewMockEventBus(ctrl)
+
+	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
+	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
+	mockLogger.EXPECT().Info(gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Debug(gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Error(gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Warn(gomock.Any()).AnyTimes()
+
+	baseTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	mockTimeProvider.EXPECT().Now().Return(baseTime).AnyTimes()
+	mockTimeProvider.EXPECT().Since(gomock.Any()).Return(5 * time.Second).AnyTimes()
+
+	workspace := &domain.Workspace{
+		ID: "workspace-123",
+		Settings: domain.WorkspaceSettings{
+			SecretKey:                "secret-key",
+			EmailTrackingEnabled:     true,
+			MarketingEmailProviderID: "marketing-provider-id",
+		},
+		Integrations: []domain.Integration{
+			{ID: "marketing-provider-id", Type: domain.IntegrationTypeEmail, EmailProvider: domain.EmailProvider{Kind: domain.EmailProviderKindSES, SES: &domain.AmazonSESSettings{AccessKey: "ak", SecretKey: "sk", Region: "us-east-1"}}},
+		},
+	}
+	mockWorkspaceRepo.EXPECT().GetByID(gomock.Any(), "workspace-123").Return(workspace, nil)
+
+	bcast := &domain.Broadcast{
+		ID:     "broadcast-123",
+		Status: domain.BroadcastStatusProcessing,
+		TestSettings: domain.BroadcastTestSettings{
+			Variations: []domain.BroadcastVariation{{TemplateID: "template-1", SenderID: "sender-gone"}},
+		},
+		Audience: domain.AudienceSettings{List: "list-1"},
+	}
+	mockBroadcastRepo.EXPECT().GetBroadcast(gomock.Any(), "workspace-123", "broadcast-123").Return(bcast, nil).AnyTimes()
+
+	tpl := &domain.Template{ID: "template-1", Email: &domain.EmailTemplate{Subject: "S", SenderID: "s", VisualEditorTree: &notifuse_mjml.MJMLBlock{BaseBlock: notifuse_mjml.NewBaseBlock("root", notifuse_mjml.MJMLComponentMjml)}}}
+	mockTemplateRepo.EXPECT().GetTemplateByID(gomock.Any(), "workspace-123", "template-1", int64(0)).Return(tpl, nil)
+
+	recipients := []*domain.ContactWithList{
+		{Contact: &domain.Contact{Email: "user1@test.com"}, ListID: "list-1"},
+		{Contact: &domain.Contact{Email: "user2@test.com"}, ListID: "list-1"},
+	}
+	mockContactRepo.EXPECT().GetContactsForBroadcast(gomock.Any(), "workspace-123", bcast.Audience, 2, "").Return(recipients, nil)
+
+	// The send stops with nothing enqueued and nothing counted as failed
+	senderGone := fmt.Errorf("%w: sender-gone", domain.ErrSenderNotFound)
+	mockMessageSender.EXPECT().SendBatch(
+		gomock.Any(), "workspace-123", "marketing-provider-id", "secret-key", gomock.Any(), gomock.Any(), domain.EmailTrackingPolicy{OpensEnabled: true, ClicksEnabled: true, UnknownConsent: domain.UnknownConsentTrack}, gomock.Any(), "broadcast-123",
+		recipients, gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
+	).Return(0, 0, fmt.Errorf("%w: the sender of the variation with template template-1: %w", broadcast.ErrBroadcastShouldPause, senderGone))
+
+	// Paused with the sender named in the reason, and not marked processed or failed
+	mockBroadcastRepo.EXPECT().UpdateBroadcast(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, b *domain.Broadcast) error {
+		assert.Equal(t, domain.BroadcastStatusPaused, b.Status)
+		assert.NotNil(t, b.PausedAt)
+		require.NotNil(t, b.PauseReason)
+		assert.Contains(t, *b.PauseReason, "Variation sender not found")
+		assert.Contains(t, *b.PauseReason, "sender-gone")
+		assert.NotContains(t, *b.PauseReason, "Recipient feed failed")
+		return nil
+	}).Times(1)
+
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).Times(1)
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastPaused)).DoAndReturn(func(_ context.Context, event domain.EventPayload) {
+		assert.Equal(t, "broadcast-123", event.EntityID)
+		assert.Equal(t, "variation_sender_not_found", event.Data["reason"])
+	})
+
+	mockTaskRepo.EXPECT().SaveState(gomock.Any(), "workspace-123", "task-123", gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	config := &broadcast.Config{FetchBatchSize: 50, MaxProcessTime: 30 * time.Second, ProgressLogInterval: 5 * time.Second}
+	orchestrator := broadcast.NewBroadcastOrchestrator(mockMessageSender, mockBroadcastRepo, mockTemplateRepo, mockContactRepo, mockTaskRepo, mockWorkspaceRepo, nil, nil, mockLogger, config, mockTimeProvider, "https://api.example.com", mockEventBus)
+
+	task := &domain.Task{
+		ID:          "task-123",
+		WorkspaceID: "workspace-123",
+		Type:        "send_broadcast",
+		BroadcastID: stringPtr("broadcast-123"),
+		State:       &domain.TaskState{Progress: 0, Message: "Starting", SendBroadcast: &domain.SendBroadcastState{BroadcastID: "broadcast-123", TotalRecipients: 2, RecipientOffset: 0}},
+		RetryCount:  0,
+		MaxRetries:  3,
+	}
+
+	done, err := orchestrator.Process(context.Background(), task, time.Now().Add(30*time.Second))
+	assert.False(t, done)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, broadcast.ErrBroadcastShouldPause))
+	assert.True(t, errors.Is(err, domain.ErrSenderNotFound))
+	assert.Equal(t, int64(0), task.State.SendBroadcast.RecipientOffset, "no recipient is skipped past")
+}
+
+// missingSenderScenario is a run of Process whose send stops because the sender of a variation is
+// gone, and what the broadcast repository does when the orchestrator then pauses the broadcast
+type missingSenderScenario struct {
+	retryCount int
+	// readErr is what the first read of the broadcast returns once the send has stopped: the read
+	// that pauses it. A later read, the finalizer's, succeeds.
+	readErr error
+	// update answers the write of the pause; nil when the pause is not expected to be written
+	update func(b *domain.Broadcast) error
+	// pausedEvent is whether the pause is announced on the event bus
+	pausedEvent bool
+	// finalize sets the expectations of the finalizer of a last attempt, which reads the task back
+	// and writes the broadcast's terminal status; nil when it is expected to do neither
+	finalize func(repo *domainmocks.MockBroadcastRepository, taskRepo *domainmocks.MockTaskRepository)
+}
+
+// processMissingSender runs the scenario and returns what Process returned
+func processMissingSender(t *testing.T, s missingSenderScenario) error {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockMessageSender := mocks.NewMockMessageSender(ctrl)
+	mockBroadcastRepo := domainmocks.NewMockBroadcastRepository(ctrl)
+	mockTemplateRepo := domainmocks.NewMockTemplateRepository(ctrl)
+	mockContactRepo := domainmocks.NewMockContactRepository(ctrl)
+	mockTaskRepo := domainmocks.NewMockTaskRepository(ctrl)
+	mockWorkspaceRepo := domainmocks.NewMockWorkspaceRepository(ctrl)
+	mockLogger := pkgmocks.NewMockLogger(ctrl)
+	mockTimeProvider := mocks.NewMockTimeProvider(ctrl)
+	mockEventBus := domainmocks.NewMockEventBus(ctrl)
+
+	mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
+	mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
+	mockLogger.EXPECT().Info(gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Debug(gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Error(gomock.Any()).AnyTimes()
+	mockLogger.EXPECT().Warn(gomock.Any()).AnyTimes()
+
+	baseTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	mockTimeProvider.EXPECT().Now().Return(baseTime).AnyTimes()
+	mockTimeProvider.EXPECT().Since(gomock.Any()).Return(5 * time.Second).AnyTimes()
+
+	workspace := &domain.Workspace{
+		ID: "workspace-123",
+		Settings: domain.WorkspaceSettings{
+			SecretKey:                "secret-key",
+			EmailTrackingEnabled:     true,
+			MarketingEmailProviderID: "marketing-provider-id",
+		},
+		Integrations: []domain.Integration{
+			{ID: "marketing-provider-id", Type: domain.IntegrationTypeEmail, EmailProvider: domain.EmailProvider{Kind: domain.EmailProviderKindSES, SES: &domain.AmazonSESSettings{AccessKey: "ak", SecretKey: "sk", Region: "us-east-1"}}},
+		},
+	}
+	mockWorkspaceRepo.EXPECT().GetByID(gomock.Any(), "workspace-123").Return(workspace, nil)
+
+	bcast := &domain.Broadcast{
+		ID:     "broadcast-123",
+		Status: domain.BroadcastStatusProcessing,
+		TestSettings: domain.BroadcastTestSettings{
+			Variations: []domain.BroadcastVariation{{TemplateID: "template-1", SenderID: "sender-gone"}},
+		},
+		Audience: domain.AudienceSettings{List: "list-1"},
+	}
+	// Each read is a copy of its own, as the repository returns, so the status the pause sets on
+	// one is not seen by the next read unless it was written
+	sendStopped := false
+	pendingReadErr := s.readErr
+	mockBroadcastRepo.EXPECT().GetBroadcast(gomock.Any(), "workspace-123", "broadcast-123").
+		DoAndReturn(func(context.Context, string, string) (*domain.Broadcast, error) {
+			if sendStopped && pendingReadErr != nil {
+				readErr := pendingReadErr
+				pendingReadErr = nil
+				return nil, readErr
+			}
+			stored := *bcast
+			return &stored, nil
+		}).AnyTimes()
+
+	tpl := &domain.Template{ID: "template-1", Email: &domain.EmailTemplate{Subject: "S", SenderID: "s", VisualEditorTree: &notifuse_mjml.MJMLBlock{BaseBlock: notifuse_mjml.NewBaseBlock("root", notifuse_mjml.MJMLComponentMjml)}}}
+	mockTemplateRepo.EXPECT().GetTemplateByID(gomock.Any(), "workspace-123", "template-1", int64(0)).Return(tpl, nil)
+
+	recipients := []*domain.ContactWithList{
+		{Contact: &domain.Contact{Email: "user1@test.com"}, ListID: "list-1"},
+		{Contact: &domain.Contact{Email: "user2@test.com"}, ListID: "list-1"},
+	}
+	mockContactRepo.EXPECT().GetContactsForBroadcast(gomock.Any(), "workspace-123", bcast.Audience, 2, "").Return(recipients, nil)
+
+	senderGone := fmt.Errorf("%w: sender-gone", domain.ErrSenderNotFound)
+	mockMessageSender.EXPECT().SendBatch(
+		gomock.Any(), "workspace-123", "marketing-provider-id", "secret-key", gomock.Any(), gomock.Any(), domain.EmailTrackingPolicy{OpensEnabled: true, ClicksEnabled: true, UnknownConsent: domain.UnknownConsentTrack}, gomock.Any(), "broadcast-123",
+		recipients, gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
+	).DoAndReturn(func(context.Context, string, string, string, string, string, domain.EmailTrackingPolicy, *domain.WebAnalyticsSettings, string, []*domain.ContactWithList, map[string]*domain.Template, *domain.EmailProvider, time.Time, string) (int, int, error) {
+		sendStopped = true
+		return 0, 0, fmt.Errorf("%w: the sender of the variation with template template-1: %w", broadcast.ErrBroadcastShouldPause, senderGone)
+	})
+
+	// Without an expectation, a write of the pause is an unexpected call
+	if s.update != nil {
+		mockBroadcastRepo.EXPECT().UpdateBroadcast(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, b *domain.Broadcast) error { return s.update(b) }).Times(1)
+	}
+	if s.finalize != nil {
+		s.finalize(mockBroadcastRepo, mockTaskRepo)
+	}
+
+	mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastSendingStarted)).Times(1)
+	if s.pausedEvent {
+		mockEventBus.EXPECT().Publish(gomock.Any(), eventOfType(domain.EventBroadcastPaused)).Times(1)
+	}
+	mockTaskRepo.EXPECT().SaveState(gomock.Any(), "workspace-123", "task-123", gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	config := &broadcast.Config{FetchBatchSize: 50, MaxProcessTime: 30 * time.Second, ProgressLogInterval: 5 * time.Second}
+	orchestrator := broadcast.NewBroadcastOrchestrator(mockMessageSender, mockBroadcastRepo, mockTemplateRepo, mockContactRepo, mockTaskRepo, mockWorkspaceRepo, nil, nil, mockLogger, config, mockTimeProvider, "https://api.example.com", mockEventBus)
+
+	task := &domain.Task{
+		ID:          "task-123",
+		WorkspaceID: "workspace-123",
+		Type:        "send_broadcast",
+		BroadcastID: stringPtr("broadcast-123"),
+		State:       &domain.TaskState{Progress: 0, Message: "Starting", SendBroadcast: &domain.SendBroadcastState{BroadcastID: "broadcast-123", TotalRecipients: 2, RecipientOffset: 0}},
+		RetryCount:  s.retryCount,
+		MaxRetries:  3,
+	}
+
+	done, err := orchestrator.Process(context.Background(), task, time.Now().Add(30*time.Second))
+	assert.False(t, done)
+	require.Error(t, err)
+	return err
+}
+
+// The run reports ErrBroadcastShouldPause only for a pause that was saved: the finalizer leaves a
+// run that reports it alone, as a broadcast already paused, so an unsaved pause reported that way
+// left the broadcast processing for good once the task had no retries left.
+func TestProcessBroadcastTask_VariationSenderMissing_PauseNotSaved(t *testing.T) {
+	failedStatusWritten := func(t *testing.T) func(*domainmocks.MockBroadcastRepository, *domainmocks.MockTaskRepository) {
+		return func(repo *domainmocks.MockBroadcastRepository, taskRepo *domainmocks.MockTaskRepository) {
+			// The finalizer reads the task back, which has no retries left, then ends the broadcast
+			taskRepo.EXPECT().Get(gomock.Any(), "workspace-123", "task-123").
+				Return(&domain.Task{ID: "task-123", WorkspaceID: "workspace-123"}, nil)
+			repo.EXPECT().
+				UpdateBroadcastStatusUnless(gomock.Any(), gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, b *domain.Broadcast, _ []domain.BroadcastStatus) (bool, error) {
+					assert.Equal(t, domain.BroadcastStatusFailed, b.Status, "the broadcast must end failed, not stay processing")
+					return true, nil
+				}).Times(1)
+		}
+	}
+
+	t.Run("a pause that cannot be written is an ordinary error, retried with the task", func(t *testing.T) {
+		writeErr := errors.New("connection reset by peer")
+
+		err := processMissingSender(t, missingSenderScenario{
+			update: func(*domain.Broadcast) error { return writeErr },
+		})
+
+		assert.False(t, errors.Is(err, broadcast.ErrBroadcastShouldPause), "nothing was paused")
+		assert.ErrorIs(t, err, writeErr)
+		assert.Contains(t, err.Error(), "sender-gone", "the cause of the pause stays in the message")
+		assert.True(t, broadcast.IsRetryable(err))
+	})
+
+	t.Run("a broadcast that cannot be read for the pause is an ordinary error", func(t *testing.T) {
+		readErr := errors.New("connection reset by peer")
+
+		err := processMissingSender(t, missingSenderScenario{readErr: readErr})
+
+		assert.False(t, errors.Is(err, broadcast.ErrBroadcastShouldPause), "nothing was paused")
+		assert.ErrorIs(t, err, readErr)
+		assert.True(t, broadcast.IsRetryable(err))
+	})
+
+	t.Run("on the last attempt a pause that cannot be written ends the broadcast failed, not processing", func(t *testing.T) {
+		err := processMissingSender(t, missingSenderScenario{
+			retryCount: 3, // no retries left
+			update:     func(*domain.Broadcast) error { return errors.New("connection reset by peer") },
+			finalize:   failedStatusWritten(t),
+		})
+
+		assert.False(t, errors.Is(err, broadcast.ErrBroadcastShouldPause))
+	})
+
+	t.Run("on the last attempt a pause that cannot be read ends the broadcast failed, not processing", func(t *testing.T) {
+		err := processMissingSender(t, missingSenderScenario{
+			retryCount: 3,
+			readErr:    errors.New("connection reset by peer"),
+			finalize:   failedStatusWritten(t),
+		})
+
+		assert.False(t, errors.Is(err, broadcast.ErrBroadcastShouldPause))
+	})
+}
+
+// On its last attempt a send that stopped for a deleted variation sender leaves the broadcast
+// paused: the pause was saved, so the finalizer neither reads the task back nor writes a terminal
+// status over it.
+func TestProcessBroadcastTask_VariationSenderMissing_LastAttemptKeepsSavedPause(t *testing.T) {
+	err := processMissingSender(t, missingSenderScenario{
+		retryCount: 3, // no retries left
+		update: func(b *domain.Broadcast) error {
+			assert.Equal(t, domain.BroadcastStatusPaused, b.Status)
+			require.NotNil(t, b.PauseReason)
+			assert.Contains(t, *b.PauseReason, "Variation sender not found")
+			return nil
+		},
+		pausedEvent: true,
+	})
+
+	assert.True(t, errors.Is(err, broadcast.ErrBroadcastShouldPause))
+	assert.True(t, errors.Is(err, domain.ErrSenderNotFound))
+}
+
 // expectLockedTestCompletion expects the end of a test phase: the row read again
 // under its lock, returned as its own copy in the test phase with no winner, and
 // the run's copy (the broadcast the run loaded, b) written as test_completed in

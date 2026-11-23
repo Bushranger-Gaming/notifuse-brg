@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -216,6 +217,33 @@ func TestCalculateNextRetryTime_WithCustomBase(t *testing.T) {
 				"result %v should be <= %v", result, maxExpected)
 		})
 	}
+}
+
+// The sender override of a queued row is stored beside the From it resolved to, so the worker
+// can check it is still on the provider. Rows queued before the field existed must still decode.
+func TestEmailQueuePayload_SenderID(t *testing.T) {
+	t.Run("survives the JSONB round trip", func(t *testing.T) {
+		data, err := json.Marshal(EmailQueuePayload{FromAddress: "two@example.com", SenderID: "sender-two"})
+		require.NoError(t, err)
+		assert.Contains(t, string(data), `"sender_id":"sender-two"`)
+
+		var decoded EmailQueuePayload
+		require.NoError(t, json.Unmarshal(data, &decoded))
+		assert.Equal(t, "sender-two", decoded.SenderID)
+	})
+
+	t.Run("no override is left out of the JSON", func(t *testing.T) {
+		data, err := json.Marshal(EmailQueuePayload{FromAddress: "default@example.com"})
+		require.NoError(t, err)
+		assert.NotContains(t, string(data), "sender_id")
+	})
+
+	t.Run("a row queued before the field existed has no override", func(t *testing.T) {
+		var decoded EmailQueuePayload
+		require.NoError(t, json.Unmarshal([]byte(`{"from_address":"default@example.com","from_name":"Default","subject":"S","html_content":"<p>x</p>"}`), &decoded))
+		assert.Empty(t, decoded.SenderID)
+		assert.Equal(t, "default@example.com", decoded.FromAddress)
+	})
 }
 
 func TestEmailQueuePayload_ToSendEmailProviderRequest(t *testing.T) {

@@ -367,10 +367,14 @@ func (e *EmailNodeExecutor) Execute(ctx context.Context, params NodeExecutionPar
 		return nil, fmt.Errorf("failed to process subject: %w", err)
 	}
 
-	// 11. Get sender
-	sender := emailProvider.GetSender(emailContent.SenderID)
-	if sender == nil {
-		return nil, fmt.Errorf("no sender configured for email provider")
+	// 11. Get sender (the node's sender wins over the template's)
+	var nodeSenderID string
+	if config.SenderID != nil {
+		nodeSenderID = *config.SenderID
+	}
+	sender, err := emailProvider.ResolveSender(nodeSenderID, emailContent.SenderID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Flag the send for stop-on-reply only when the automation opts in. This drives
@@ -406,6 +410,7 @@ func (e *EmailNodeExecutor) Execute(ctx context.Context, params NodeExecutionPar
 		Payload: domain.EmailQueuePayload{
 			FromAddress:         sender.Email,
 			FromName:            sender.Name,
+			SenderID:            nodeSenderID,
 			Subject:             subject,
 			HTMLContent:         htmlContent,
 			RateLimitPerMinute:  emailProvider.RateLimitPerMinute,

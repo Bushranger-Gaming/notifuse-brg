@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   Button,
   Drawer,
@@ -115,6 +115,27 @@ export function UpsertBroadcastDrawer({
   const trackingPolicy = getEmailTrackingPolicy(workspace.settings)
   const workspaceTracks = trackingPolicy.opens_enabled || trackingPolicy.clicks_enabled
   const broadcastUntracked = Form.useWatch('tracking_mode', form) === 'no_tracking'
+
+  // A variation may send from one of the marketing provider's senders in place of the sender
+  // its template names. The empty value is "no override": the template's sender is used.
+  const senderOptions = useMemo(() => {
+    const marketingProvider = workspace.integrations?.find(
+      (integration) => integration.id === workspace.settings.marketing_email_provider_id
+    )
+    return [
+      { value: '', label: t`Template sender` },
+      ...(marketingProvider?.email_provider?.senders ?? []).map((sender) => ({
+        value: sender.id,
+        label: `${sender.name} <${sender.email}>`
+      }))
+    ]
+  }, [workspace.integrations, workspace.settings.marketing_email_provider_id, t])
+  // The form keeps "no override" as an absent sender_id, so it is not sent at all; the select
+  // shows it as the "Template sender" option.
+  const senderFieldProps = {
+    normalize: (value?: string) => value || undefined,
+    getValueProps: (value?: string) => ({ value: value ?? '' })
+  }
 
   // Update utm_campaign when campaign name changes
   useEffect(() => {
@@ -771,14 +792,14 @@ export function UpsertBroadcastDrawer({
                               <Form.List name={['test_settings', 'variations']}>
                                 {(fields, { add, remove }) => (
                                   <>
-                                    {fields.map((field) => (
+                                    {fields.map((field, index) => (
                                       <div key={field.key} className="">
                                         <Row gutter={24}>
-                                          <Col span={22}>
+                                          <Col span={12}>
                                             <Form.Item
                                               key={`template-${field.key}`}
                                               name={[field.name, 'template_id']}
-                                              label={t`Template ${field.key + 1}`}
+                                              label={t`Template ${index + 1}`}
                                               rules={[
                                                 { required: true },
                                                 ({ getFieldsValue }) => ({
@@ -790,7 +811,7 @@ export function UpsertBroadcastDrawer({
                                                       getFieldsValue()?.test_settings?.variations ||
                                                       []
 
-                                                    // Check if this template is used in any other variation
+                                                    // Check if this template is already used in another variation
                                                     const duplicates = allVariations.filter(
                                                       (v: { template_id?: string }, i: number) =>
                                                         v?.template_id === value && i !== field.name
@@ -814,6 +835,16 @@ export function UpsertBroadcastDrawer({
                                                 placeholder={t`Select template`}
                                                 category="marketing"
                                               />
+                                            </Form.Item>
+                                          </Col>
+                                          <Col span={10}>
+                                            <Form.Item
+                                              key={`sender-${field.key}`}
+                                              name={[field.name, 'sender_id']}
+                                              label={t`Sender ${index + 1}`}
+                                              {...senderFieldProps}
+                                            >
+                                              <Select options={senderOptions} />
                                             </Form.Item>
                                           </Col>
                                           {fields.length > 1 && (
@@ -867,17 +898,30 @@ export function UpsertBroadcastDrawer({
                         // If A/B testing is disabled, show single template config
                         return (
                           <div>
-                            <Form.Item
-                              name={['test_settings', 'variations', 0, 'template_id']}
-                              label={t`Template`}
-                              rules={[{ required: true }]}
-                            >
-                              <TemplateSelectorInput
-                                workspaceId={workspace.id}
-                                placeholder={t`Select template`}
-                                category="marketing"
-                              />
-                            </Form.Item>
+                            <Row gutter={24}>
+                              <Col span={12}>
+                                <Form.Item
+                                  name={['test_settings', 'variations', 0, 'template_id']}
+                                  label={t`Template`}
+                                  rules={[{ required: true }]}
+                                >
+                                  <TemplateSelectorInput
+                                    workspaceId={workspace.id}
+                                    placeholder={t`Select template`}
+                                    category="marketing"
+                                  />
+                                </Form.Item>
+                              </Col>
+                              <Col span={12}>
+                                <Form.Item
+                                  name={['test_settings', 'variations', 0, 'sender_id']}
+                                  label={t`Sender`}
+                                  {...senderFieldProps}
+                                >
+                                  <Select options={senderOptions} />
+                                </Form.Item>
+                              </Col>
+                            </Row>
                           </div>
                         )
                       }}

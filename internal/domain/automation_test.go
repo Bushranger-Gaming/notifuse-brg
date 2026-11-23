@@ -1041,6 +1041,31 @@ func TestEmailNodeConfig_Validate(t *testing.T) {
 	}
 }
 
+func TestEmailNodeConfig_SenderID(t *testing.T) {
+	t.Run("sender_id is read from the node config", func(t *testing.T) {
+		var config EmailNodeConfig
+		require.NoError(t, json.Unmarshal([]byte(`{"template_id":"tmpl123","sender_id":"sender-1"}`), &config))
+		require.NotNil(t, config.SenderID)
+		assert.Equal(t, "sender-1", *config.SenderID)
+	})
+
+	t.Run("a config without sender_id has none", func(t *testing.T) {
+		var config EmailNodeConfig
+		require.NoError(t, json.Unmarshal([]byte(`{"template_id":"tmpl123"}`), &config))
+		assert.Nil(t, config.SenderID)
+	})
+
+	t.Run("sender_id is written back and an unset one is omitted", func(t *testing.T) {
+		data, err := json.Marshal(EmailNodeConfig{TemplateID: "tmpl123", SenderID: automationStringPtr("sender-1")})
+		require.NoError(t, err)
+		assert.Contains(t, string(data), `"sender_id":"sender-1"`)
+
+		data, err = json.Marshal(EmailNodeConfig{TemplateID: "tmpl123"})
+		require.NoError(t, err)
+		assert.NotContains(t, string(data), "sender_id")
+	})
+}
+
 func TestAddToListNodeConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string

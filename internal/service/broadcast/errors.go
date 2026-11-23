@@ -9,9 +9,19 @@ import (
 var (
 	// ErrRecipientSkipped is returned when a recipient is skipped due to feed error
 	ErrRecipientSkipped = errors.New("recipient skipped due to feed error")
-	// ErrBroadcastShouldPause is returned when broadcast should pause due to consecutive feed failures
-	ErrBroadcastShouldPause = errors.New("broadcast should pause due to consecutive feed failures")
+	// ErrBroadcastShouldPause is returned when the broadcast cannot go on until someone fixes
+	// something: a recipient feed that keeps failing, or a variation sender that was deleted
+	ErrBroadcastShouldPause = errors.New("broadcast should pause")
 )
+
+// errVariationSenderMissing is what checkVariationSenders returns, before a batch sends or
+// enqueues anything, when the sender a variation chose is no longer on the email provider.
+// Every recipient sent that variation would fail the same way, so the broadcast pauses for the
+// sender to be restored or another one chosen, rather than counting each recipient as a failed
+// build and moving on.
+func errVariationSenderMissing(templateID string, err error) error {
+	return fmt.Errorf("%w: the sender of the variation with template %s: %w", ErrBroadcastShouldPause, templateID, err)
+}
 
 // ErrorCode represents specific error conditions in the broadcast system
 type ErrorCode string

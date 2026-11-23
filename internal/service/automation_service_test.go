@@ -82,7 +82,7 @@ func TestAutomationService_Create(t *testing.T) {
 	mockAuthService := mocks.NewMockAuthService(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	service := NewAutomationService(mockRepo, mockAuthService, mockLogger, false)
+	service := NewAutomationService(mockRepo, mockAuthService, nil, mockLogger, false)
 
 	ctx := context.Background()
 	workspaceID := "workspace-123"
@@ -157,7 +157,7 @@ func TestAutomationService_Get(t *testing.T) {
 	mockAuthService := mocks.NewMockAuthService(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	service := NewAutomationService(mockRepo, mockAuthService, mockLogger, false)
+	service := NewAutomationService(mockRepo, mockAuthService, nil, mockLogger, false)
 
 	ctx := context.Background()
 	workspaceID := "workspace-123"
@@ -213,7 +213,7 @@ func TestAutomationService_List(t *testing.T) {
 	mockAuthService := mocks.NewMockAuthService(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	service := NewAutomationService(mockRepo, mockAuthService, mockLogger, false)
+	service := NewAutomationService(mockRepo, mockAuthService, nil, mockLogger, false)
 
 	ctx := context.Background()
 	workspaceID := "workspace-123"
@@ -260,7 +260,7 @@ func TestAutomationService_Update(t *testing.T) {
 	mockAuthService := mocks.NewMockAuthService(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	service := NewAutomationService(mockRepo, mockAuthService, mockLogger, false)
+	service := NewAutomationService(mockRepo, mockAuthService, nil, mockLogger, false)
 
 	ctx := context.Background()
 	workspaceID := "workspace-123"
@@ -624,7 +624,7 @@ func TestAutomationService_WebhookNodeTargets(t *testing.T) {
 		ctx := context.Background()
 		auth.EXPECT().AuthenticateUserForWorkspace(gomock.Any(), workspaceID).
 			Return(ctx, &domain.User{}, automationTransitionUserWorkspace(workspaceID), nil).AnyTimes()
-		return NewAutomationService(repo, auth, pkgmocks.NewMockLogger(ctrl), allowPrivateWebhookHosts), repo, ctx
+		return NewAutomationService(repo, auth, nil, pkgmocks.NewMockLogger(ctrl), allowPrivateWebhookHosts), repo, ctx
 	}
 
 	// createTestAutomationService names "node-root" as the root, so the trigger
@@ -775,6 +775,243 @@ func decodeUpdateAutomationRequest(t *testing.T, body string) *domain.UpdateAuto
 	return &req
 }
 
+// TestAutomationService_EmailNodeSenders covers the save-time check of the sender an email
+// node overrides its template's with: it must exist on the node's provider, or the marketing
+// provider when the node names no integration, and the caller is told which one is wrong
+// with a ValidationError the handlers answer as 400.
+func TestAutomationService_EmailNodeSenders(t *testing.T) {
+	const workspaceID = "workspace-123"
+
+	newWorkspace := func(marketingProviderID string) *domain.Workspace {
+		return &domain.Workspace{
+			ID:       workspaceID,
+			Settings: domain.WorkspaceSettings{MarketingEmailProviderID: marketingProviderID},
+			Integrations: domain.Integrations{
+				{ID: "mkt", Type: domain.IntegrationTypeEmail, EmailProvider: domain.EmailProvider{
+					Kind:    domain.EmailProviderKindSMTP,
+					Senders: []domain.EmailSender{{ID: "sender-marketing", Email: "marketing@example.com", Name: "Marketing", IsDefault: true}},
+				}},
+				{ID: "other", Type: domain.IntegrationTypeEmail, EmailProvider: domain.EmailProvider{
+					Kind:    domain.EmailProviderKindSMTP,
+					Senders: []domain.EmailSender{{ID: "sender-other", Email: "other@example.com", Name: "Other", IsDefault: true}},
+				}},
+				{ID: "supabase", Type: domain.IntegrationTypeSupabase},
+			},
+		}
+	}
+
+	// workspace is what the workspace repo returns; nil expects no read at all, which is
+	// what an automation whose nodes carry no sender must cost.
+	newService := func(t *testing.T, workspace *domain.Workspace) (*AutomationService, *mocks.MockAutomationRepository, context.Context) {
+		t.Helper()
+		ctrl := gomock.NewController(t)
+		t.Cleanup(ctrl.Finish)
+		repo := mocks.NewMockAutomationRepository(ctrl)
+		auth := mocks.NewMockAuthService(ctrl)
+		workspaceRepo := mocks.NewMockWorkspaceRepository(ctrl)
+		ctx := context.Background()
+		auth.EXPECT().AuthenticateUserForWorkspace(gomock.Any(), workspaceID).
+			Return(ctx, &domain.User{}, automationTransitionUserWorkspace(workspaceID), nil).AnyTimes()
+		if workspace != nil {
+			workspaceRepo.EXPECT().GetByID(gomock.Any(), workspaceID).Return(workspace, nil)
+		}
+		return NewAutomationService(repo, auth, workspaceRepo, pkgmocks.NewMockLogger(ctrl), false), repo, ctx
+	}
+
+	withEmailNode := func(config map[string]interface{}) *domain.Automation {
+		automation := createTestAutomationService("auto-123", workspaceID)
+		trigger := createTestAutomationNodeService("node-root", automation.ID, domain.NodeTypeTrigger)
+		trigger.NextNodeID = strPtr("node-email")
+		node := createTestAutomationNodeService("node-email", automation.ID, domain.NodeTypeEmail)
+		node.Config = config
+		automation.Nodes = []*domain.AutomationNode{trigger, node}
+		return automation
+	}
+
+	t.Run("create accepts", func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			workspace *domain.Workspace
+			config    map[string]interface{}
+		}{
+			{"a sender of the marketing provider", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "sender_id": "sender-marketing"}},
+			{"a sender of the integration the node names", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "integration_id": "other", "sender_id": "sender-other"}},
+			{"an empty integration as the marketing provider", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "integration_id": "", "sender_id": "sender-marketing"}},
+			{"a node without a sender, with no workspace read", nil, map[string]interface{}{"template_id": "tpl-1"}},
+			{"a node with an empty sender, with no workspace read", nil, map[string]interface{}{"template_id": "tpl-1", "sender_id": ""}},
+			// The executor reads a null as no sender and no integration
+			{"a node with a null sender and a null integration, with no workspace read", nil, map[string]interface{}{"template_id": "tpl-1", "sender_id": nil, "integration_id": nil}},
+			// The executor decodes the config with encoding/json, which matches keys whatever their case
+			{"a sender of the marketing provider under an upper-case key", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "SENDER_ID": "sender-marketing"}},
+			{"a sender and an integration under mixed-case keys", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "Integration_ID": "other", "Sender_Id": "sender-other"}},
+			// Only the executor's decode is applied, not the template it also asks for: a draft is savable unfinished
+			{"a draft node with a sender and no template yet", newWorkspace("mkt"), map[string]interface{}{"sender_id": "sender-marketing"}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				service, repo, ctx := newService(t, tc.workspace)
+				automation := withEmailNode(tc.config)
+				repo.EXPECT().Create(ctx, workspaceID, automation).Return(nil)
+
+				assert.NoError(t, service.Create(ctx, workspaceID, automation))
+			})
+		}
+	})
+
+	t.Run("create refuses", func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			workspace *domain.Workspace
+			config    map[string]interface{}
+			wantInMsg []string
+		}{
+			{"a sender the marketing provider does not have", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "sender_id": "sender-gone"}, []string{"node-email", "sender-gone"}},
+			{"a sender of the marketing provider on another integration", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "integration_id": "other", "sender_id": "sender-marketing"}, []string{"node-email", "sender-marketing"}},
+			{"a sender of another integration on the marketing provider", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "sender_id": "sender-other"}, []string{"node-email", "sender-other"}},
+			{"an integration the workspace does not have", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "integration_id": "missing", "sender_id": "sender-other"}, []string{"node-email", "missing"}},
+			{"an integration that is not an email provider", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "integration_id": "supabase", "sender_id": "sender-other"}, []string{"node-email", "supabase"}},
+			{"a sender when no marketing provider is configured", newWorkspace(""), map[string]interface{}{"template_id": "tpl-1", "sender_id": "sender-marketing"}, []string{"node-email", "sender-marketing", "no marketing email provider"}},
+			// A value that is not a string would pass this check unread and then fail every
+			// execution of the node. A nil workspace expects no workspace read: the type is
+			// checked before the provider is looked at.
+			{"a sender that is a number", nil, map[string]interface{}{"template_id": "tpl-1", "sender_id": 42}, []string{"node-email", "sender_id", "must be a string"}},
+			{"a sender that is a list", nil, map[string]interface{}{"template_id": "tpl-1", "sender_id": []interface{}{"sender-marketing"}}, []string{"node-email", "sender_id", "must be a string"}},
+			{"an integration that is a number, beside a sender", nil, map[string]interface{}{"template_id": "tpl-1", "integration_id": 7, "sender_id": "sender-other"}, []string{"node-email", "integration_id", "must be a string"}},
+			{"an integration that is a boolean, with no sender", nil, map[string]interface{}{"template_id": "tpl-1", "integration_id": true}, []string{"node-email", "integration_id", "must be a string"}},
+			// The key is read as the executor reads it: SENDER_ID is the sender_id it sends with
+			{"an upper-case sender key that is a number", nil, map[string]interface{}{"template_id": "tpl-1", "SENDER_ID": 42}, []string{"node-email", "sender_id", "must be a string"}},
+			{"an upper-case sender key the marketing provider does not have", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "SENDER_ID": "sender-gone"}, []string{"node-email", "sender-gone"}},
+			{"a mixed-case integration key the workspace does not have", newWorkspace("mkt"), map[string]interface{}{"template_id": "tpl-1", "Integration_ID": "missing", "sender_id": "sender-other"}, []string{"node-email", "missing"}},
+			{"a mixed-case integration key that is a number", nil, map[string]interface{}{"template_id": "tpl-1", "Integration_ID": 7, "sender_id": "sender-other"}, []string{"node-email", "integration_id", "must be a string"}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				service, _, ctx := newService(t, tc.workspace)
+
+				// No repo.Create expectation: gomock fails the test if it is called.
+				err := service.Create(ctx, workspaceID, withEmailNode(tc.config))
+
+				var validationErr domain.ValidationError
+				require.True(t, errors.As(err, &validationErr), "want a ValidationError, got %v", err)
+				for _, want := range tc.wantInMsg {
+					assert.Contains(t, validationErr.Message, want)
+				}
+			})
+		}
+	})
+
+	t.Run("update refuses a sender the provider does not have", func(t *testing.T) {
+		service, _, ctx := newService(t, newWorkspace("mkt"))
+		req := decodeUpdateAutomationRequest(t, `{
+			"workspace_id": "workspace-123",
+			"automation": {
+				"id": "auto-123",
+				"workspace_id": "workspace-123",
+				"name": "Wrong sender",
+				"status": "draft",
+				"list_id": "list-123",
+				"trigger": {"event_kind": "email.opened", "frequency": "once"},
+				"root_node_id": "node-root",
+				"nodes": [
+					{"id": "node-root", "automation_id": "auto-123", "type": "trigger", "config": {}, "next_node_id": "node-email"},
+					{"id": "node-email", "automation_id": "auto-123", "type": "email", "config": {"template_id": "tpl-1", "sender_id": "sender-gone"}}
+				]
+			}
+		}`)
+		require.NoError(t, req.Validate())
+
+		// No GetByID or UpdateIfStatus expectation: the check runs before the stored
+		// row is read, so gomock fails the test if either is called.
+		err := service.Update(ctx, workspaceID, req.Automation)
+
+		var validationErr domain.ValidationError
+		require.True(t, errors.As(err, &validationErr), "want a ValidationError, got %v", err)
+		assert.Contains(t, validationErr.Message, "node-email")
+		assert.Contains(t, validationErr.Message, "sender-gone")
+	})
+
+	t.Run("update refuses a sender and an integration that are not strings", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			config string
+			field  string
+		}{
+			{"sender", `{"template_id": "tpl-1", "sender_id": 42}`, "sender_id"},
+			{"integration", `{"template_id": "tpl-1", "integration_id": 7, "sender_id": "sender-other"}`, "integration_id"},
+			{"sender under an upper-case key", `{"template_id": "tpl-1", "SENDER_ID": 42}`, "sender_id"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				// A nil workspace expects no workspace read: the type is checked first
+				service, _, ctx := newService(t, nil)
+				req := decodeUpdateAutomationRequest(t, `{
+					"workspace_id": "workspace-123",
+					"automation": {
+						"id": "auto-123",
+						"workspace_id": "workspace-123",
+						"name": "Wrong type",
+						"status": "draft",
+						"list_id": "list-123",
+						"trigger": {"event_kind": "email.opened", "frequency": "once"},
+						"root_node_id": "node-root",
+						"nodes": [
+							{"id": "node-root", "automation_id": "auto-123", "type": "trigger", "config": {}, "next_node_id": "node-email"},
+							{"id": "node-email", "automation_id": "auto-123", "type": "email", "config": `+tc.config+`}
+						]
+					}
+				}`)
+				require.NoError(t, req.Validate())
+
+				// No GetByID or UpdateIfStatus expectation: the check runs before the stored
+				// row is read, so gomock fails the test if either is called.
+				err := service.Update(ctx, workspaceID, req.Automation)
+
+				var validationErr domain.ValidationError
+				require.True(t, errors.As(err, &validationErr), "want a ValidationError, got %v", err)
+				assert.Contains(t, validationErr.Message, "node-email")
+				assert.Contains(t, validationErr.Message, tc.field)
+				assert.Contains(t, validationErr.Message, "must be a string")
+			})
+		}
+	})
+
+	// Only the nodes a request submits are checked: a sender deleted since the stored email
+	// node was saved must not block an unrelated edit such as a rename.
+	t.Run("update that omits the nodes keeps a stored email node whose sender was deleted", func(t *testing.T) {
+		// A nil workspace expects no workspace read: the stored nodes are not checked
+		service, repo, ctx := newService(t, nil)
+		req := decodeUpdateAutomationRequest(t, `{
+			"workspace_id": "workspace-123",
+			"automation": {
+				"id": "auto-123",
+				"workspace_id": "workspace-123",
+				"name": "Renamed",
+				"status": "draft",
+				"list_id": "list-123",
+				"trigger": {"event_kind": "email.opened", "frequency": "once"}
+			}
+		}`)
+		require.NoError(t, req.Validate())
+		require.Nil(t, req.Automation.Nodes, "the request must carry no nodes, or this proves nothing")
+
+		stored := withEmailNode(map[string]interface{}{"template_id": "tpl-1", "sender_id": "sender-gone"})
+		stored.RootNodeID = "node-root"
+		repo.EXPECT().GetByID(ctx, workspaceID, "auto-123").Return(stored, nil)
+
+		var persisted *domain.Automation
+		repo.EXPECT().
+			UpdateIfStatus(ctx, workspaceID, gomock.Any(), domain.AutomationStatusDraft).
+			DoAndReturn(func(_ context.Context, _ string, a *domain.Automation, _ domain.AutomationStatus) (bool, error) {
+				persisted = a
+				return true, nil
+			})
+
+		require.NoError(t, service.Update(ctx, workspaceID, req.Automation))
+
+		require.NotNil(t, persisted)
+		assert.Equal(t, "Renamed", persisted.Name)
+		require.Len(t, persisted.Nodes, 2)
+		assert.Equal(t, "sender-gone", persisted.Nodes[1].Config["sender_id"])
+	})
+}
+
 // TestAutomationService_Update_OmittedNodesKeepTheStoredWorkflow covers a body that says
 // nothing about the workflow. automations.update rewrites the whole row, and Validate skips
 // the root-node check when the set is empty, so such a body is accepted and stores an
@@ -788,7 +1025,7 @@ func TestAutomationService_Update_OmittedNodesKeepTheStoredWorkflow(t *testing.T
 	mockAuthService := mocks.NewMockAuthService(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	service := NewAutomationService(mockRepo, mockAuthService, mockLogger, false)
+	service := NewAutomationService(mockRepo, mockAuthService, nil, mockLogger, false)
 
 	ctx := context.Background()
 	workspaceID := "workspace-123"
@@ -925,7 +1162,7 @@ func TestAutomationService_Delete(t *testing.T) {
 	mockAuthService := mocks.NewMockAuthService(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	service := NewAutomationService(mockRepo, mockAuthService, mockLogger, false)
+	service := NewAutomationService(mockRepo, mockAuthService, nil, mockLogger, false)
 
 	ctx := context.Background()
 	workspaceID := "workspace-123"
@@ -997,7 +1234,7 @@ func TestAutomationService_Activate(t *testing.T) {
 	mockAuthService := mocks.NewMockAuthService(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	service := NewAutomationService(mockRepo, mockAuthService, mockLogger, false)
+	service := NewAutomationService(mockRepo, mockAuthService, nil, mockLogger, false)
 
 	ctx := context.Background()
 	workspaceID := "workspace-123"
@@ -1261,7 +1498,7 @@ func TestAutomationService_Pause(t *testing.T) {
 	mockAuthService := mocks.NewMockAuthService(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	service := NewAutomationService(mockRepo, mockAuthService, mockLogger, false)
+	service := NewAutomationService(mockRepo, mockAuthService, nil, mockLogger, false)
 
 	ctx := context.Background()
 	workspaceID := "workspace-123"
@@ -1315,7 +1552,7 @@ func TestAutomationService_GetContactNodeExecutions(t *testing.T) {
 	mockAuthService := mocks.NewMockAuthService(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	service := NewAutomationService(mockRepo, mockAuthService, mockLogger, false)
+	service := NewAutomationService(mockRepo, mockAuthService, nil, mockLogger, false)
 
 	ctx := context.Background()
 	workspaceID := "workspace-123"
@@ -1392,7 +1629,7 @@ func newAutomationTransitionMocks(t *testing.T) (*AutomationService, *mocks.Mock
 	repo := mocks.NewMockAutomationRepository(ctrl)
 	auth := mocks.NewMockAuthService(ctrl)
 	log := pkgmocks.NewMockLogger(ctrl)
-	return NewAutomationService(repo, auth, log, false), repo, auth, log
+	return NewAutomationService(repo, auth, nil, log, false), repo, auth, log
 }
 
 func automationTransitionUserWorkspace(workspaceID string) *domain.UserWorkspace {
@@ -1973,7 +2210,7 @@ func TestAutomationService_Update_OmittedExitOnReplyKeepsTheStoredSetting(t *tes
 	mockAuthService := mocks.NewMockAuthService(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	service := NewAutomationService(mockRepo, mockAuthService, mockLogger, false)
+	service := NewAutomationService(mockRepo, mockAuthService, nil, mockLogger, false)
 
 	ctx := context.Background()
 	workspaceID := "workspace-123"
@@ -2094,7 +2331,7 @@ func TestAutomationService_Update_OmittedListIDKeepsTheStoredList(t *testing.T) 
 	mockAuthService := mocks.NewMockAuthService(ctrl)
 	mockLogger := pkgmocks.NewMockLogger(ctrl)
 
-	service := NewAutomationService(mockRepo, mockAuthService, mockLogger, false)
+	service := NewAutomationService(mockRepo, mockAuthService, nil, mockLogger, false)
 
 	ctx := context.Background()
 	workspaceID := "workspace-123"

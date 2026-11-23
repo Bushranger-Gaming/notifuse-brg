@@ -15,9 +15,10 @@ import (
 
 // AutomationService handles automation business logic
 type AutomationService struct {
-	repo        domain.AutomationRepository
-	authService domain.AuthService
-	logger      logger.Logger
+	repo          domain.AutomationRepository
+	authService   domain.AuthService
+	workspaceRepo domain.WorkspaceRepository
+	logger        logger.Logger
 	// allowPrivateWebhookHosts mirrors WEBHOOK_DELIVERY_ALLOW_PRIVATE_HOSTS. It only
 	// relaxes the save-time check on webhook node URLs; the dial-time guard on the
 	// node's client is configured from the same setting in app wiring.
@@ -28,12 +29,14 @@ type AutomationService struct {
 func NewAutomationService(
 	repo domain.AutomationRepository,
 	authService domain.AuthService,
+	workspaceRepo domain.WorkspaceRepository,
 	logger logger.Logger,
 	allowPrivateWebhookHosts bool,
 ) *AutomationService {
 	return &AutomationService{
 		repo:                     repo,
 		authService:              authService,
+		workspaceRepo:            workspaceRepo,
 		logger:                   logger,
 		allowPrivateWebhookHosts: allowPrivateWebhookHosts,
 	}
@@ -65,6 +68,10 @@ func (s *AutomationService) Create(ctx context.Context, workspaceID string, auto
 	}
 
 	if err := validateWebhookNodeTargets(automation.Nodes, s.allowPrivateWebhookHosts); err != nil {
+		return fmt.Errorf("invalid automation: %w", err)
+	}
+
+	if err := s.validateEmailNodeSenders(ctx, workspaceID, automation.Nodes); err != nil {
 		return fmt.Errorf("invalid automation: %w", err)
 	}
 
@@ -147,6 +154,10 @@ func (s *AutomationService) Update(ctx context.Context, workspaceID string, auto
 	// included: a URL saved before this check existed is reported the next time
 	// someone edits the automation, and the dial-time guard refuses it meanwhile.
 	if err := validateWebhookNodeTargets(automation.Nodes, s.allowPrivateWebhookHosts); err != nil {
+		return fmt.Errorf("invalid automation: %w", err)
+	}
+
+	if err := s.validateEmailNodeSenders(ctx, workspaceID, automation.Nodes); err != nil {
 		return fmt.Errorf("invalid automation: %w", err)
 	}
 
@@ -621,6 +632,89 @@ func validateWebhookNodeTargets(nodes []*domain.AutomationNode, allowPrivateHost
 		}
 		if err := rejectPrivateWebhookHost(parsed.Hostname()); err != nil {
 			return domain.NewValidationError(fmt.Sprintf("webhook node %s: %v", node.ID, err))
+		}
+	}
+	return nil
+}
+
+// decodeEmailNodeConfig reads an email node's config as the node executor does (parseEmailNodeConfig):
+// a JSON round trip into EmailNodeConfig, which matches keys whatever their case, so "SENDER_ID"
+// is the sender_id the executor sends with. Reading exact keys here let such a key skip the checks
+// below. A key that is absent or null reads as empty, as in the executor. A value of the wrong
+// type would fail every execution of the node, so it is refused when the automation is saved.
+// parseEmailNodeConfig's own Validate, which asks for a template, is left out: a draft is savable
+// unfinished.
+func decodeEmailNodeConfig(node *domain.AutomationNode) (*domain.EmailNodeConfig, error) {
+	data, err := json.Marshal(node.Config)
+	if err != nil {
+		return nil, domain.NewValidationError(fmt.Sprintf("email node %s: invalid config: %v", node.ID, err))
+	}
+	var config domain.EmailNodeConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field != "" {
+			return nil, domain.NewValidationError(fmt.Sprintf("email node %s: %s must be a %s", node.ID, typeErr.Field, typeErr.Type))
+		}
+		return nil, domain.NewValidationError(fmt.Sprintf("email node %s: invalid config: %v", node.ID, err))
+	}
+	return &config, nil
+}
+
+// validateEmailNodeSenders checks that the sender an email node overrides its template's
+// with exists on the node's email provider: the one of its integration, or the workspace's
+// marketing provider when the node names no integration. The workspace is read only when
+// a node carries a sender, so automations that never choose one cost no extra lookup. The
+// config is decoded as the executor decodes it, so the sender and the integration the node
+// names must each be a string, whether or not the other is set.
+func (s *AutomationService) validateEmailNodeSenders(ctx context.Context, workspaceID string, nodes []*domain.AutomationNode) error {
+	var workspace *domain.Workspace
+	for _, node := range nodes {
+		if node == nil || node.Type != domain.NodeTypeEmail {
+			continue
+		}
+		config, err := decodeEmailNodeConfig(node)
+		if err != nil {
+			return err
+		}
+		var senderID, integrationID string
+		if config.SenderID != nil {
+			senderID = *config.SenderID
+		}
+		if config.IntegrationID != nil {
+			integrationID = *config.IntegrationID
+		}
+		if senderID == "" {
+			continue
+		}
+
+		if workspace == nil {
+			var err error
+			workspace, err = s.workspaceRepo.GetByID(ctx, workspaceID)
+			if err != nil {
+				return fmt.Errorf("failed to get workspace: %w", err)
+			}
+		}
+
+		var emailProvider *domain.EmailProvider
+		if integrationID != "" {
+			integration := workspace.GetIntegrationByID(integrationID)
+			if integration == nil || integration.Type != domain.IntegrationTypeEmail {
+				return domain.NewValidationError(fmt.Sprintf("email node %s: email integration %s not found", node.ID, integrationID))
+			}
+			emailProvider = &integration.EmailProvider
+		} else {
+			var err error
+			emailProvider, err = workspace.GetEmailProvider(true)
+			if err != nil {
+				return domain.NewValidationError(fmt.Sprintf("email node %s: %v", node.ID, err))
+			}
+			if emailProvider == nil {
+				return domain.NewValidationError(fmt.Sprintf("email node %s: sender %s cannot be used, no marketing email provider is configured", node.ID, senderID))
+			}
+		}
+
+		if _, err := emailProvider.ResolveSender(senderID, ""); err != nil {
+			return domain.NewValidationError(fmt.Sprintf("email node %s: %v", node.ID, err))
 		}
 	}
 	return nil
