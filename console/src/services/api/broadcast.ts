@@ -56,6 +56,7 @@ export interface Template {
 export interface BroadcastVariation {
   variation_name: string
   template_id: string
+  sender_id?: string // Overrides the template's sender; empty keeps the template's own
   metrics?: VariationMetrics
   template?: Template // Template joined from server when with_templates is true
 }

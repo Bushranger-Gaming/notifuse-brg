@@ -12,9 +12,18 @@ import type { List } from '../../services/api/list'
 // The template selector pulls in template list queries; replace it with a bare
 // input so the required template_id field can be filled without network calls.
 vi.mock('../templates/TemplateSelectorInput', () => ({
-  default: ({ value, onChange }: { value?: string; onChange?: (value: string) => void }) => (
+  default: ({
+    value,
+    onChange,
+    placeholder
+  }: {
+    value?: string
+    onChange?: (value: string) => void
+    placeholder?: string
+  }) => (
     <input
       data-testid="template-selector"
+      placeholder={placeholder}
       value={value ?? ''}
       onChange={(e) => onChange?.(e.target.value)}
     />
@@ -83,8 +92,10 @@ function renderDrawer(ui: ReactElement) {
   )
 }
 
-const openEditDrawer = async (broadcast: Broadcast) => {
-  renderDrawer(<UpsertBroadcastDrawer workspace={workspace} broadcast={broadcast} lists={lists} />)
+const openEditDrawer = async (broadcast: Broadcast, drawerWorkspace: Workspace = workspace) => {
+  renderDrawer(
+    <UpsertBroadcastDrawer workspace={drawerWorkspace} broadcast={broadcast} lists={lists} />
+  )
   await userEvent.click(screen.getByRole('button', { name: /Edit Broadcast/i }))
 }
 
@@ -93,13 +104,24 @@ const openEditDrawer = async (broadcast: Broadcast) => {
 const feedSwitch = (title: string) =>
   within(screen.getByText(title).closest('div') as HTMLElement).getByRole('switch')
 
+// Switching forward validates the tab being left first (handleTabChange awaits
+// form.validateFields), so the new tab and the footer that goes with it land after the click
+// has resolved, not with it. The lookups wait for them.
+//
+// Ant Design adds screen-reader text ("Tab 4 of 4") in front of the label on the selected,
+// focused tab, so its accessible name is no longer exactly the label: match on the end of
+// the name. A tab that is already selected is left alone.
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 const goToTab = async (label: string) => {
-  await userEvent.click(screen.getByRole('tab', { name: label }))
+  const tab = await screen.findByRole('tab', { name: new RegExp(`${escapeRegExp(label)}$`) })
+  if (tab.getAttribute('aria-selected') === 'true') return
+  await userEvent.click(tab)
 }
 
 const save = async () => {
   await goToTab('4. Content')
-  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await userEvent.click(await screen.findByRole('button', { name: 'Save' }))
 }
 
 const updatePayload = () =>
@@ -401,5 +423,348 @@ describe('UpsertBroadcastDrawer unsubscribed recipients', () => {
     expect(
       screen.getByText(/carry no List-Unsubscribe header, so mail clients show no Unsubscribe button/)
     ).toBeInTheDocument()
+  })
+})
+
+// A variation can send from another sender than the one its template names. The broadcast goes
+// out through the workspace's marketing provider, so only that provider's senders are offered.
+const senderWorkspace = {
+  ...workspace,
+  settings: { ...workspace.settings, marketing_email_provider_id: 'int-marketing' },
+  integrations: [
+    {
+      id: 'int-transactional',
+      name: 'Transactional',
+      type: 'email',
+      email_provider: {
+        kind: 'smtp',
+        rate_limit_per_minute: 25,
+        senders: [{ id: 'sender-alerts', email: 'alerts@example.com', name: 'Alerts', is_default: true }]
+      }
+    },
+    {
+      id: 'int-marketing',
+      name: 'Marketing',
+      type: 'email',
+      email_provider: {
+        kind: 'ses',
+        rate_limit_per_minute: 25,
+        senders: [
+          { id: 'sender-hello', email: 'hello@example.com', name: 'Hello', is_default: true },
+          { id: 'sender-support', email: 'support@example.com', name: 'Support', is_default: false }
+        ]
+      }
+    }
+  ]
+} as unknown as Workspace
+
+const HELLO = 'Hello <hello@example.com>'
+const SUPPORT = 'Support <support@example.com>'
+
+const singleVariation = (senderId?: string) =>
+  makeBroadcast({
+    test_settings: {
+      enabled: false,
+      sample_percentage: 50,
+      auto_send_winner: false,
+      variations: [{ variation_name: 'default', template_id: 'tmpl1', sender_id: senderId }]
+    }
+  } as Partial<Broadcast>)
+
+const abTest = (variations: { template_id: string; sender_id?: string }[]) =>
+  makeBroadcast({
+    test_settings: {
+      enabled: true,
+      sample_percentage: 50,
+      auto_send_winner: false,
+      variations: variations.map((variation, i) => ({
+        variation_name: String.fromCharCode(65 + i),
+        ...variation
+      }))
+    }
+  } as Partial<Broadcast>)
+
+// The sender select of a variation, found through its label: "Sender", numbered once A/B testing
+// lists several variations.
+const senderSelect = (index = 0) => {
+  const label = screen.getAllByText(/^Sender/, { selector: 'label' })[index]
+  return within(label.closest('.ant-form-item') as HTMLElement).getByRole('combobox')
+}
+
+const optionContents = () =>
+  Array.from(document.querySelectorAll<HTMLElement>('.ant-select-item-option-content'))
+
+// Opens the sender select and returns its options in the order they are listed. Only one select
+// is opened per test, so the options in the page are the ones of that select.
+const openSenderOptions = async (index = 0) => {
+  await userEvent.click(senderSelect(index))
+  await waitFor(() => expect(optionContents().length).toBeGreaterThan(0))
+  return optionContents()
+}
+
+const chooseSender = async (option: string, index = 0) => {
+  const options = await openSenderOptions(index)
+  await userEvent.click(options.find((o) => o.textContent === option) as HTMLElement)
+}
+
+const variationsSent = () => updatePayload().test_settings.variations
+
+describe('UpsertBroadcastDrawer sender', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(broadcastApi.update as Mock).mockResolvedValue({ broadcast: {} })
+  })
+
+  it('lists the template sender first, then the marketing provider senders as Name <email>', async () => {
+    await openEditDrawer(singleVariation(), senderWorkspace)
+    await goToTab('4. Content')
+
+    const options = await openSenderOptions()
+
+    // The transactional provider's sender is left out: the broadcast does not go through it.
+    expect(options.map((option) => option.textContent)).toEqual(['Template sender', HELLO, SUPPORT])
+  })
+
+  it('offers only the template sender when the workspace has no marketing provider senders', async () => {
+    await openEditDrawer(singleVariation())
+    await goToTab('4. Content')
+
+    const options = await openSenderOptions()
+
+    expect(options.map((option) => option.textContent)).toEqual(['Template sender'])
+  })
+
+  it('shows "Template sender" while the variation has no sender of its own', async () => {
+    await openEditDrawer(singleVariation(), senderWorkspace)
+    await goToTab('4. Content')
+
+    const select = senderSelect().closest('.ant-select') as HTMLElement
+    expect(within(select).getByText('Template sender')).toBeInTheDocument()
+  })
+
+  it('saves the sender chosen for the variation', async () => {
+    await openEditDrawer(singleVariation(), senderWorkspace)
+    await goToTab('4. Content')
+
+    await chooseSender(SUPPORT)
+    await save()
+
+    await waitFor(() => expect(broadcastApi.update).toHaveBeenCalled())
+    expect(variationsSent()[0].sender_id).toBe('sender-support')
+  })
+
+  it('shows the sender stored on a broadcast and sends it back when the broadcast is saved', async () => {
+    await openEditDrawer(singleVariation('sender-hello'), senderWorkspace)
+    await goToTab('4. Content')
+
+    const select = senderSelect().closest('.ant-select') as HTMLElement
+    expect(within(select).getByText(HELLO)).toBeInTheDocument()
+
+    await save()
+
+    await waitFor(() => expect(broadcastApi.update).toHaveBeenCalled())
+    expect(variationsSent()[0].sender_id).toBe('sender-hello')
+  })
+
+  it('sends no sender once the user goes back to "Template sender"', async () => {
+    await openEditDrawer(singleVariation('sender-hello'), senderWorkspace)
+    await goToTab('4. Content')
+
+    await chooseSender('Template sender')
+    await save()
+
+    await waitFor(() => expect(broadcastApi.update).toHaveBeenCalled())
+    expect(variationsSent()[0].sender_id).toBeUndefined()
+  })
+
+  it('offers a sender select on every A/B variation and saves the choice of each', async () => {
+    await openEditDrawer(
+      abTest([{ template_id: 'tmpl1' }, { template_id: 'tmpl2' }]),
+      senderWorkspace
+    )
+    await goToTab('4. Content')
+
+    expect(screen.getAllByText(/^Sender/, { selector: 'label' })).toHaveLength(2)
+
+    await chooseSender(SUPPORT, 1)
+    await save()
+
+    await waitFor(() => expect(broadcastApi.update).toHaveBeenCalled())
+    expect(variationsSent()[0].sender_id).toBeUndefined()
+    expect(variationsSent()[1].sender_id).toBe('sender-support')
+  })
+
+  it('numbers the senders of the A/B variations from 1', async () => {
+    await openEditDrawer(
+      abTest([{ template_id: 'tmpl1' }, { template_id: 'tmpl2' }]),
+      senderWorkspace
+    )
+    await goToTab('4. Content')
+
+    expect(screen.getByText('Sender 1', { selector: 'label' })).toBeInTheDocument()
+    expect(screen.getByText('Sender 2', { selector: 'label' })).toBeInTheDocument()
+  })
+
+  // A row keeps the key it was given when an earlier one is removed, so numbering by the key
+  // left "Sender 2" and "Template 2" on the first row of what remained.
+  it('numbers the senders and templates by their row once a variation is removed', async () => {
+    await openEditDrawer(
+      abTest([{ template_id: 'tmpl1' }, { template_id: 'tmpl2' }, { template_id: 'tmpl3' }]),
+      senderWorkspace
+    )
+    await goToTab('4. Content')
+
+    await userEvent.click(screen.getAllByRole('button', { name: /delete/i })[0])
+    await userEvent.click(await screen.findByRole('button', { name: 'Yes' }))
+
+    await waitFor(() =>
+      expect(screen.getAllByText(/^Sender/, { selector: 'label' })).toHaveLength(2)
+    )
+    // The first variation is the one that went
+    expect(
+      screen.getAllByTestId('template-selector').map((input) => (input as HTMLInputElement).value)
+    ).toEqual(['tmpl2', 'tmpl3'])
+    expect(screen.getByText('Sender 1', { selector: 'label' })).toBeInTheDocument()
+    expect(screen.getByText('Sender 2', { selector: 'label' })).toBeInTheDocument()
+    expect(screen.queryByText('Sender 3', { selector: 'label' })).not.toBeInTheDocument()
+    expect(screen.getByText('Template 1', { selector: 'label' })).toBeInTheDocument()
+    expect(screen.getByText('Template 2', { selector: 'label' })).toBeInTheDocument()
+    expect(screen.queryByText('Template 3', { selector: 'label' })).not.toBeInTheDocument()
+  })
+
+  // The marketing provider is the one the broadcast goes through; when it cannot be found, or has
+  // no senders to list, the select holds only "Template sender". The workspace keeps other
+  // integrations with senders, so a lookup that ignored the provider id would offer one.
+  it.each([
+    [
+      'is not set',
+      {
+        settings: { ...senderWorkspace.settings, marketing_email_provider_id: undefined },
+        integrations: senderWorkspace.integrations
+      }
+    ],
+    [
+      'is not among the integrations of the workspace',
+      {
+        settings: { ...senderWorkspace.settings, marketing_email_provider_id: 'int-gone' },
+        integrations: senderWorkspace.integrations
+      }
+    ],
+    [
+      'has no email provider',
+      {
+        settings: senderWorkspace.settings,
+        integrations: [
+          ...(senderWorkspace.integrations ?? []).slice(0, 1),
+          { id: 'int-marketing', name: 'Marketing', type: 'supabase' }
+        ]
+      }
+    ],
+    [
+      'lists no senders',
+      {
+        settings: senderWorkspace.settings,
+        integrations: [
+          ...(senderWorkspace.integrations ?? []).slice(0, 1),
+          {
+            id: 'int-marketing',
+            name: 'Marketing',
+            type: 'email',
+            email_provider: { kind: 'ses', rate_limit_per_minute: 25 }
+          }
+        ]
+      }
+    ]
+  ])('offers only the template sender when the marketing provider %s', async (_, patch) => {
+    const drawerWorkspace = { ...senderWorkspace, ...patch } as unknown as Workspace
+    await openEditDrawer(singleVariation(), drawerWorkspace)
+    await goToTab('4. Content')
+
+    const options = await openSenderOptions()
+
+    expect(options.map((option) => option.textContent)).toEqual(['Template sender'])
+  })
+
+  it('offers the senders of a marketing provider the workspace gained after the drawer first rendered', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const broadcast = singleVariation()
+    const drawerFor = (drawerWorkspace: Workspace) => (
+      <QueryClientProvider client={queryClient}>
+        <AntApp>
+          <UpsertBroadcastDrawer workspace={drawerWorkspace} broadcast={broadcast} lists={lists} />
+        </AntApp>
+      </QueryClientProvider>
+    )
+    const { rerender } = render(drawerFor(workspace))
+    rerender(drawerFor(senderWorkspace))
+    await userEvent.click(screen.getByRole('button', { name: /Edit Broadcast/i }))
+    await goToTab('4. Content')
+
+    const options = await openSenderOptions()
+
+    expect(options.map((option) => option.textContent)).toEqual(['Template sender', HELLO, SUPPORT])
+  })
+})
+
+describe('UpsertBroadcastDrawer single template', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(broadcastApi.update as Mock).mockResolvedValue({ broadcast: {} })
+  })
+
+  const withoutTemplate = () =>
+    makeBroadcast({
+      test_settings: {
+        enabled: false,
+        sample_percentage: 50,
+        auto_send_winner: false,
+        variations: [{ variation_name: 'default', template_id: '' }]
+      }
+    } as Partial<Broadcast>)
+
+  it('labels the template field and prompts to select a template', async () => {
+    await openEditDrawer(singleVariation(), senderWorkspace)
+    await goToTab('4. Content')
+
+    expect(screen.getByText('Template', { selector: 'label' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Select template')).toBeInTheDocument()
+  })
+
+  it('refuses to save without a template and marks the template field as required', async () => {
+    await openEditDrawer(withoutTemplate(), senderWorkspace)
+
+    await save()
+
+    const field = screen
+      .getByText('Template', { selector: 'label' })
+      .closest('.ant-form-item') as HTMLElement
+    // antd renders the message itself through a motion wrapper that jsdom never runs (the
+    // ant-form-item-additional box stays empty), so the field's error state is the assertion.
+    await waitFor(() => expect(field).toHaveClass('ant-form-item-has-error'))
+    expect(broadcastApi.update).not.toHaveBeenCalled()
+  })
+})
+
+describe('UpsertBroadcastDrawer duplicate template', () => {
+  const duplicateMessage = 'This template is already used in another variation'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(broadcastApi.update as Mock).mockResolvedValue({ broadcast: {} })
+  })
+
+  it('rejects the same template in two variations, whatever their senders', async () => {
+    await openEditDrawer(
+      abTest([
+        { template_id: 'tmpl1', sender_id: 'sender-hello' },
+        { template_id: 'tmpl1', sender_id: 'sender-support' }
+      ]),
+      senderWorkspace
+    )
+
+    await save()
+
+    expect((await screen.findAllByText(duplicateMessage)).length).toBeGreaterThan(0)
+    expect(broadcastApi.update).not.toHaveBeenCalled()
   })
 })

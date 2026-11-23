@@ -1079,6 +1079,146 @@ func TestEmailNodeExecutor_Execute_IntegrationOverrideNotEmailType(t *testing.T)
 	assert.Contains(t, err.Error(), "integration supabase_integration is not an email provider")
 }
 
+func TestEmailNodeExecutor_Execute_NodeSenderOverride(t *testing.T) {
+	overrideIntegrationID := "override_integration456"
+
+	// The workspace marketing provider has the template's default sender1 and a second
+	// sender; another integration has a sender of its own.
+	newWorkspace := func() *domain.Workspace {
+		workspace := createTestWorkspaceWithEmailProvider()
+		workspace.Integrations[0].EmailProvider.Senders = append(workspace.Integrations[0].EmailProvider.Senders, domain.EmailSender{
+			ID:    "sender-marketing-2",
+			Email: "marketing2@example.com",
+			Name:  "Marketing Two",
+		})
+		workspace.Integrations = append(workspace.Integrations, domain.Integration{
+			ID:   overrideIntegrationID,
+			Name: "Override Email Provider",
+			Type: domain.IntegrationTypeEmail,
+			EmailProvider: domain.EmailProvider{
+				Kind:               domain.EmailProviderKindSMTP,
+				RateLimitPerMinute: 30,
+				Senders: []domain.EmailSender{
+					{ID: "sender-override-default", Email: "override-default@example.com", Name: "Override Default", IsDefault: true},
+					{ID: "sender-override-2", Email: "override2@example.com", Name: "Override Two"},
+				},
+				SMTP: &domain.SMTPSettings{Host: "smtp-override.example.com", Port: 587, Username: "user2", Password: "pass2"},
+			},
+		})
+		return workspace
+	}
+
+	tests := []struct {
+		name          string
+		config        map[string]interface{}
+		wantFromEmail string
+		wantFromName  string
+		// wantSenderID is the override the queued row carries for the worker to check
+		wantSenderID  string
+		wantErrNoSend bool
+	}{
+		{
+			name:          "node sender wins over the template sender on the marketing provider",
+			config:        map[string]interface{}{"template_id": "tpl123", "sender_id": "sender-marketing-2"},
+			wantFromEmail: "marketing2@example.com",
+			wantFromName:  "Marketing Two",
+			wantSenderID:  "sender-marketing-2",
+		},
+		{
+			name:          "node sender is looked up on the integration the node names",
+			config:        map[string]interface{}{"template_id": "tpl123", "integration_id": overrideIntegrationID, "sender_id": "sender-override-2"},
+			wantFromEmail: "override2@example.com",
+			wantFromName:  "Override Two",
+			wantSenderID:  "sender-override-2",
+		},
+		{
+			name:          "no node sender keeps the template sender",
+			config:        map[string]interface{}{"template_id": "tpl123"},
+			wantFromEmail: "sender@example.com",
+			wantFromName:  "Test Sender",
+		},
+		{
+			name:          "empty node sender keeps the template sender",
+			config:        map[string]interface{}{"template_id": "tpl123", "sender_id": ""},
+			wantFromEmail: "sender@example.com",
+			wantFromName:  "Test Sender",
+		},
+		{
+			name:          "missing node sender fails the send instead of using the default",
+			config:        map[string]interface{}{"template_id": "tpl123", "sender_id": "sender-gone"},
+			wantErrNoSend: true,
+		},
+		{
+			name:          "a sender of another provider is not found on the node's integration",
+			config:        map[string]interface{}{"template_id": "tpl123", "integration_id": overrideIntegrationID, "sender_id": "sender-marketing-2"},
+			wantErrNoSend: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockEmailQueueRepo := mocks.NewMockEmailQueueRepository(ctrl)
+			mockTemplateRepo := mocks.NewMockTemplateRepository(ctrl)
+			mockWorkspaceRepo := mocks.NewMockWorkspaceRepository(ctrl)
+			mockListRepo := mocks.NewMockListRepository(ctrl)
+			mockContactListRepo := mocks.NewMockContactListRepository(ctrl)
+			mockLogger := setupMockLoggerForNodeExecutor(ctrl)
+
+			executor := NewEmailNodeExecutor(mockEmailQueueRepo, mockTemplateRepo, mockWorkspaceRepo, mockListRepo, mockContactListRepo, "https://api.example.com", mockLogger)
+
+			mockWorkspaceRepo.EXPECT().
+				GetByID(gomock.Any(), "ws1").
+				Return(newWorkspace(), nil)
+
+			mockTemplateRepo.EXPECT().
+				GetTemplateByID(gomock.Any(), "ws1", "tpl123", int64(0)).
+				Return(createTestTemplate(), nil)
+
+			mockListRepo.EXPECT().
+				GetListByID(gomock.Any(), "ws1", "list1").
+				Return(&domain.List{ID: "list1", Name: "Test List"}, nil)
+
+			// A failed send never reaches the queue: an Enqueue here is an unexpected call
+			if !tt.wantErrNoSend {
+				mockEmailQueueRepo.EXPECT().
+					Enqueue(gomock.Any(), "ws1", gomock.Any()).
+					DoAndReturn(func(ctx context.Context, workspaceID string, entries []*domain.EmailQueueEntry) error {
+						require.Len(t, entries, 1)
+						assert.Equal(t, tt.wantFromEmail, entries[0].Payload.FromAddress)
+						assert.Equal(t, tt.wantFromName, entries[0].Payload.FromName)
+						assert.Equal(t, tt.wantSenderID, entries[0].Payload.SenderID)
+						return nil
+					})
+			}
+
+			result, err := executor.Execute(context.Background(), NodeExecutionParams{
+				WorkspaceID: "ws1",
+				Node: &domain.AutomationNode{
+					ID:         "email_node1",
+					Type:       domain.NodeTypeEmail,
+					NextNodeID: strPtr("next_node"),
+					Config:     tt.config,
+				},
+				Contact:     &domain.ContactAutomation{ID: "ca1", ContactEmail: "recipient@example.com"},
+				ContactData: &domain.Contact{Email: "recipient@example.com"},
+				Automation:  &domain.Automation{ID: "auto1", Name: "Test Automation", ListID: "list1"},
+			})
+
+			if tt.wantErrNoSend {
+				require.Error(t, err)
+				assert.Nil(t, result)
+				assert.ErrorIs(t, err, domain.ErrSenderNotFound)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, result)
+		})
+	}
+}
+
 func TestEmailNodeExecutor_NodeType(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

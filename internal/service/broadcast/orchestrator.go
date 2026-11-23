@@ -510,6 +510,67 @@ func (o *BroadcastOrchestrator) stillLastAttempt(ctx context.Context, task *doma
 	return !stored.HasRetriesLeft()
 }
 
+// pauseReasonFor words the pause of a broadcast whose send returned
+// ErrBroadcastShouldPause: the reason the broadcast row carries for whoever resumes it,
+// and the one its paused event carries.
+func pauseReasonFor(err error) (reason string, eventReason string) {
+	if errors.Is(err, domain.ErrSenderNotFound) {
+		return fmt.Sprintf("Variation sender not found: %v", err), "variation_sender_not_found"
+	}
+	return fmt.Sprintf("Recipient feed failed: %v", err), "recipient_feed_failed"
+}
+
+// pauseBroadcast pauses a broadcast whose send cannot go on: it writes the paused status with the
+// reason, pauses the broadcast's queued rows so the worker stops sending, and announces the pause.
+// It returns an error, and changes nothing, when the broadcast cannot be read or the pause cannot
+// be written: the broadcast is then not paused.
+func (o *BroadcastOrchestrator) pauseBroadcast(ctx context.Context, task *domain.Task, broadcastID, reason, eventReason string) error {
+	currentBroadcast, err := o.broadcastRepo.GetBroadcast(ctx, task.WorkspaceID, broadcastID)
+	if err == nil && currentBroadcast == nil {
+		err = fmt.Errorf("broadcast %s not found", broadcastID)
+	}
+	if err != nil {
+		o.logger.WithFields(map[string]interface{}{
+			"task_id":      task.ID,
+			"broadcast_id": broadcastID,
+			"error":        err.Error(),
+		}).Error("Failed to get broadcast to pause it")
+		return fmt.Errorf("failed to get broadcast: %w", err)
+	}
+
+	currentBroadcast.Status = domain.BroadcastStatusPaused
+	currentBroadcast.PausedAt = &[]time.Time{time.Now().UTC()}[0]
+	currentBroadcast.PauseReason = &reason
+	currentBroadcast.UpdatedAt = time.Now().UTC()
+
+	if err := o.broadcastRepo.UpdateBroadcast(ctx, currentBroadcast); err != nil {
+		o.logger.WithFields(map[string]interface{}{
+			"task_id":      task.ID,
+			"broadcast_id": broadcastID,
+			"error":        err.Error(),
+		}).Error("Failed to update broadcast status to paused")
+		return fmt.Errorf("failed to save the pause: %w", err)
+	}
+
+	// Pause already-queued rows so the worker stops sending.
+	o.pauseQueueEntries(ctx, task.WorkspaceID, broadcastID)
+
+	if o.eventBus != nil {
+		pausedEvent := domain.EventPayload{
+			Type:        domain.EventBroadcastPaused,
+			WorkspaceID: task.WorkspaceID,
+			EntityID:    broadcastID,
+			Data: map[string]interface{}{
+				"broadcast_id": broadcastID,
+				"task_id":      task.ID,
+				"reason":       eventReason,
+			},
+		}
+		o.eventBus.Publish(context.Background(), pausedEvent)
+	}
+	return nil
+}
+
 // Process executes or continues a broadcast sending task
 // Its results are named so the deferred finalizer sees whatever error it
 // returns: a return that left a local err unset used to skip it.
@@ -539,7 +600,7 @@ func (o *BroadcastOrchestrator) Process(ctx context.Context, task *domain.Task, 
 				return
 			}
 
-			// Also skip if broadcast was paused due to recipient feed failure
+			// Also skip if broadcast was paused due to recipient feed failure or a deleted variation sender
 			if errors.Is(err, ErrBroadcastShouldPause) {
 				o.logger.WithFields(map[string]interface{}{
 					"task_id":      task.ID,
@@ -1372,41 +1433,30 @@ func (o *BroadcastOrchestrator) Process(ctx context.Context, task *domain.Task, 
 				return false, err
 			}
 
-			// Check if this is a recipient feed error requiring broadcast pause
+			// Check if this is an error requiring broadcast pause: a recipient feed
+			// that failed, or a variation sender that no longer exists
 			if errors.Is(sendErr, ErrBroadcastShouldPause) {
+				reason, eventReason := pauseReasonFor(sendErr)
 				o.logger.WithFields(map[string]interface{}{
 					"task_id":      task.ID,
 					"broadcast_id": broadcastState.BroadcastID,
 					"offset":       currentOffset,
 					"error":        sendErr.Error(),
-				}).Warn("Recipient feed failed - pausing broadcast")
+				}).Warn("Send cannot go on - pausing broadcast: " + eventReason)
 
-				currentBroadcast, getBroadcastErr := o.broadcastRepo.GetBroadcast(ctx, task.WorkspaceID, broadcastState.BroadcastID)
-				if getBroadcastErr == nil && currentBroadcast != nil {
-					currentBroadcast.Status = domain.BroadcastStatusPaused
-					currentBroadcast.PausedAt = &[]time.Time{time.Now().UTC()}[0]
-					reason := fmt.Sprintf("Recipient feed failed: %v", sendErr)
-					currentBroadcast.PauseReason = &reason
-					currentBroadcast.UpdatedAt = time.Now().UTC()
-
-					if updateErr := o.broadcastRepo.UpdateBroadcast(ctx, currentBroadcast); updateErr == nil {
-						// Pause already-queued rows so the worker stops sending.
-						o.pauseQueueEntries(ctx, task.WorkspaceID, broadcastState.BroadcastID)
-
-						if o.eventBus != nil {
-							pausedEvent := domain.EventPayload{
-								Type:        domain.EventBroadcastPaused,
-								WorkspaceID: task.WorkspaceID,
-								EntityID:    broadcastState.BroadcastID,
-								Data: map[string]interface{}{
-									"broadcast_id": broadcastState.BroadcastID,
-									"task_id":      task.ID,
-									"reason":       "recipient_feed_failed",
-								},
-							}
-							o.eventBus.Publish(context.Background(), pausedEvent)
-						}
-					}
+				// The pause is persisted before the run reports it: the finalizer leaves
+				// a run that returns ErrBroadcastShouldPause alone, as a broadcast already
+				// paused, so a pause that was never written must not be reported as one
+				pauseErr := o.pauseBroadcast(ctx, task, broadcastState.BroadcastID, reason, eventReason)
+				if pauseErr != nil {
+					// Still sending, as far as the row says. An ordinary error takes the usual
+					// way: the task is retried while it has retries left, and on its last
+					// attempt the finalizer ends the broadcast as failed instead of leaving
+					// it processing for good. The cause is kept as text, not wrapped, so the
+					// error does not match ErrBroadcastShouldPause.
+					err = NewBroadcastError(ErrCodeSendFailed, "failed to pause the broadcast", true,
+						fmt.Errorf("%v: %w", sendErr, pauseErr))
+					return false, err
 				}
 
 				err = sendErr

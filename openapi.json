@@ -9016,6 +9016,11 @@
             "description": "Template ID for this variation",
             "example": "template_variant_a"
           },
+          "sender_id": {
+            "type": "string",
+            "description": "ID of a sender of the workspace's marketing email provider that sends this variation instead of the template's sender. Omit to use the template's sender.",
+            "example": "0b1e8c34-5a2f-4d7e-9c61-3f8a2d4e6b70"
+          },
           "metrics": {
             "$ref": "#/components/schemas/VariationMetrics"
           },

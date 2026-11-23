@@ -1566,6 +1566,207 @@ func TestEmailQueueWorker_DeadMailboxIsTerminalOnTheFirstAttempt(t *testing.T) {
 	assert.Equal(t, 0, worker.GetCircuitBreakerStats()["integration-1"].Failures)
 }
 
+// TestEmailQueueWorker_SenderOverrideMustStillBeOnTheProvider covers a row queued with the
+// sender a broadcast variation or an automation step chose. The row stores the resolved
+// From, so the provider would send it even after the sender was deleted, or when a retry
+// sends it through an integration that never had the sender: the worker refuses such a row
+// for good, and leaves the circuit breaker out of it.
+func TestEmailQueueWorker_SenderOverrideMustStillBeOnTheProvider(t *testing.T) {
+	newWorkspace := func() *domain.Workspace {
+		return &domain.Workspace{
+			ID: "workspace-1",
+			Integrations: []domain.Integration{
+				{
+					ID:   "integration-1",
+					Type: domain.IntegrationTypeEmail,
+					EmailProvider: domain.EmailProvider{
+						Kind:               domain.EmailProviderKindSMTP,
+						RateLimitPerMinute: 100,
+						Senders: []domain.EmailSender{
+							{ID: "sender-default", Email: "default@example.com", Name: "Default", IsDefault: true},
+							{ID: "sender-two", Email: "two@example.com", Name: "Two"},
+						},
+					},
+				},
+				{
+					ID:   "integration-2",
+					Type: domain.IntegrationTypeEmail,
+					EmailProvider: domain.EmailProvider{
+						Kind:               domain.EmailProviderKindSMTP,
+						RateLimitPerMinute: 100,
+						Senders: []domain.EmailSender{
+							{ID: "sender-other-default", Email: "other@example.com", Name: "Other", IsDefault: true},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name          string
+		integrationID string
+		senderID      string
+		wantSent      bool
+	}{
+		{name: "sender is on the provider", integrationID: "integration-1", senderID: "sender-two", wantSent: true},
+		{name: "sender deleted while the row waited", integrationID: "integration-1", senderID: "sender-gone"},
+		{name: "retry through an integration that lacks the sender", integrationID: "integration-2", senderID: "sender-two"},
+		{name: "row without a sender override, as queued before the field existed", integrationID: "integration-2", wantSent: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockQueueRepo := mocks.NewMockEmailQueueRepository(ctrl)
+			mockWorkspaceRepo := mocks.NewMockWorkspaceRepository(ctrl)
+			mockEmailService := mocks.NewMockEmailServiceInterface(ctrl)
+			mockMessageHistoryRepo := mocks.NewMockMessageHistoryRepository(ctrl)
+			mockLogger := quietLogger(ctrl)
+
+			entry := &domain.EmailQueueEntry{
+				ID:            "entry-1",
+				Status:        domain.EmailQueueStatusPending,
+				SourceType:    domain.EmailQueueSourceBroadcast,
+				SourceID:      "broadcast-1",
+				IntegrationID: tt.integrationID,
+				ContactEmail:  "recipient@example.com",
+				MessageID:     "msg-1",
+				Payload: domain.EmailQueuePayload{
+					FromAddress: "two@example.com",
+					FromName:    "Two",
+					SenderID:    tt.senderID,
+					Subject:     "Subject",
+					HTMLContent: "<p>Hello</p>",
+				},
+				MaxAttempts: 3,
+			}
+
+			mockQueueRepo.EXPECT().MarkAsProcessing(gomock.Any(), "workspace-1", "entry-1").Return(nil)
+			// The one message history write of the attempt: the failure of a refused row, the
+			// outcome of a sent one
+			var written *domain.MessageHistory
+			mockMessageHistoryRepo.EXPECT().Upsert(gomock.Any(), "workspace-1", gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, _, _ string, message *domain.MessageHistory) error {
+					written = message
+					return nil
+				})
+
+			var failedErr error
+			var failedPermanent bool
+			var failedCalls int
+			if tt.wantSent {
+				mockEmailService.EXPECT().SendEmail(gomock.Any(), gomock.Any(), true).
+					DoAndReturn(func(_ context.Context, request domain.SendEmailProviderRequest, _ bool) error {
+						assert.Equal(t, "two@example.com", request.FromAddress)
+						return nil
+					})
+				mockQueueRepo.EXPECT().MarkAsSent(gomock.Any(), "workspace-1", "entry-1").Return(nil)
+			} else {
+				// A refused row never reaches the provider: a SendEmail here is an unexpected call
+				mockQueueRepo.EXPECT().
+					MarkAsPermanentlyFailed(gomock.Any(), "workspace-1", "entry-1", gomock.Any()).
+					DoAndReturn(func(_ context.Context, _, _, reason string) error {
+						assert.Contains(t, reason, domain.ErrSenderNotFound.Error())
+						assert.Contains(t, reason, tt.senderID)
+						return nil
+					})
+			}
+
+			worker := NewEmailQueueWorker(mockQueueRepo, mockWorkspaceRepo, mockEmailService,
+				mockMessageHistoryRepo, DefaultWorkerConfig(), mockLogger)
+			worker.initContexts(context.Background())
+			worker.SetCallbacks(nil, func(_ string, _ domain.EmailQueueSourceType, _ string, _ string, err error, isPermanent bool) {
+				failedCalls++
+				failedErr = err
+				failedPermanent = isPermanent
+			})
+
+			opened := processOne(worker, newWorkspace(), entry)
+
+			assert.Nil(t, opened)
+			assert.False(t, worker.circuitBreaker.IsOpen(tt.integrationID))
+			assert.Equal(t, 0, worker.GetCircuitBreakerStats()[tt.integrationID].Failures, "a refused sender is not a provider failure")
+
+			require.NotNil(t, written, "the attempt is recorded in message history")
+			assert.Equal(t, "msg-1", written.ID)
+			assert.Equal(t, "recipient@example.com", written.ContactEmail)
+			require.NotNil(t, written.BroadcastID)
+			assert.Equal(t, "broadcast-1", *written.BroadcastID)
+			if tt.wantSent {
+				assert.Nil(t, written.FailedAt, "a sent row records no failure")
+				assert.Nil(t, written.StatusInfo)
+				assert.Equal(t, 0, failedCalls)
+				return
+			}
+			// The refusal is recorded as a failed message that names the sender
+			require.NotNil(t, written.FailedAt, "the refusal is recorded as a failure")
+			require.NotNil(t, written.StatusInfo)
+			assert.Contains(t, *written.StatusInfo, domain.ErrSenderNotFound.Error())
+			assert.Contains(t, *written.StatusInfo, tt.senderID)
+			require.Equal(t, 1, failedCalls)
+			assert.True(t, failedPermanent, "the first attempt is also the last")
+			assert.ErrorIs(t, failedErr, domain.ErrSenderNotFound)
+		})
+	}
+}
+
+// TestEmailQueueWorker_ProcessEntry_StopOnReplyGuardRunsBeforeTheSenderCheck covers a row whose
+// journey was exited by a reply after it was queued and whose sender was deleted too: the
+// stop-on-reply guard drops it, and it is not failed for its sender.
+func TestEmailQueueWorker_ProcessEntry_StopOnReplyGuardRunsBeforeTheSenderCheck(t *testing.T) {
+	worker, mockQueueRepo, mockEmailService, mockMessageHistoryRepo, mockAutomationRepo, workspace, entry := jitGuardWorker(t)
+	caID := *entry.Payload.ContactAutomationID
+	entry.Payload.SenderID = "sender-gone"
+
+	failedCalls := 0
+	worker.SetCallbacks(nil, func(string, domain.EmailQueueSourceType, string, string, error, bool) {
+		failedCalls++
+	})
+
+	mockAutomationRepo.EXPECT().GetContactAutomation(gomock.Any(), workspace.ID, caID).
+		Return(&domain.ContactAutomation{ID: caID, Status: domain.ContactAutomationStatusExited}, nil)
+	// The guard removes the row from the queue. Failing it for its sender would call
+	// MarkAsPermanentlyFailed, which has no expectation here.
+	mockQueueRepo.EXPECT().MarkAsSent(gomock.Any(), workspace.ID, entry.ID).Return(nil)
+	mockEmailService.EXPECT().SendEmail(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	mockMessageHistoryRepo.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+	processOne(worker, workspace, entry)
+
+	assert.Equal(t, 0, failedCalls, "a row the guard dropped is not reported as a failed email")
+}
+
+// TestEmailQueueWorker_ProcessEntry_SenderCheckStillRefusesRowOfAnActiveJourney is the control
+// for the test above: a journey still active gets past the guard, and the deleted sender then
+// refuses the row for good, with nothing sent.
+func TestEmailQueueWorker_ProcessEntry_SenderCheckStillRefusesRowOfAnActiveJourney(t *testing.T) {
+	worker, mockQueueRepo, mockEmailService, mockMessageHistoryRepo, mockAutomationRepo, workspace, entry := jitGuardWorker(t)
+	caID := *entry.Payload.ContactAutomationID
+	entry.Payload.SenderID = "sender-gone"
+
+	mockAutomationRepo.EXPECT().GetContactAutomation(gomock.Any(), workspace.ID, caID).
+		Return(&domain.ContactAutomation{ID: caID, Status: domain.ContactAutomationStatusActive}, nil)
+	mockQueueRepo.EXPECT().MarkAsPermanentlyFailed(gomock.Any(), workspace.ID, entry.ID, gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _, reason string) error {
+			assert.Contains(t, reason, domain.ErrSenderNotFound.Error())
+			assert.Contains(t, reason, "sender-gone")
+			return nil
+		})
+	mockEmailService.EXPECT().SendEmail(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	mockMessageHistoryRepo.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, message *domain.MessageHistory) error {
+			require.NotNil(t, message.FailedAt)
+			require.NotNil(t, message.StatusInfo)
+			assert.Contains(t, *message.StatusInfo, "sender-gone")
+			return nil
+		}).Times(1)
+
+	processOne(worker, workspace, entry)
+}
+
 // TestEmailQueueWorker_RetentionSweep covers the cost of keeping abandoned entries:
 // each holds one recipient's compiled email, so the sweep has to run — but it walks
 // every workspace, so it must not run on every one-second poll.

@@ -534,6 +534,329 @@ func TestSendBatch(t *testing.T) {
 	assert.Equal(t, 0, failed)
 }
 
+// TestSendBatch_VariationSender tests that the sender chosen on a variation is the one the
+// message goes out with, and that a sender that does not exist pauses the broadcast
+func TestSendBatch_VariationSender(t *testing.T) {
+	defaultSender := domain.EmailSender{ID: "sender-default", Email: "default@example.com", Name: "Default", IsDefault: true}
+	senderTwo := domain.EmailSender{ID: "sender-two", Email: "two@example.com", Name: "Two"}
+	senderThree := domain.EmailSender{ID: "sender-three", Email: "three@example.com", Name: "Three"}
+	emailProvider := &domain.EmailProvider{
+		Kind:    domain.EmailProviderKindSMTP,
+		Senders: []domain.EmailSender{defaultSender, senderTwo, senderThree},
+		SMTP:    &domain.SMTPSettings{Host: "smtp.example.com", Port: 587, Username: "user", Password: "pass", UseTLS: true},
+	}
+
+	// Both templates name the default sender; the subject tells the two apart in the request
+	newTemplate := func(id, subject string) *domain.Template {
+		return &domain.Template{
+			ID: id,
+			Email: &domain.EmailTemplate{
+				SenderID:         defaultSender.ID,
+				Subject:          subject,
+				VisualEditorTree: createValidTestTree(createTestTextBlock("txt1", "Test content")),
+			},
+		}
+	}
+	templates := map[string]*domain.Template{
+		"tpl-a": newTemplate("tpl-a", "Subject A"),
+		"tpl-b": newTemplate("tpl-b", "Subject B"),
+	}
+	winner := "tpl-b"
+	winnerA := "tpl-a"
+
+	tests := []struct {
+		name            string
+		testSettings    domain.BroadcastTestSettings
+		winningTemplate *string
+		// wantFrom is the From addresses expected for each subject, whatever their order
+		wantFrom map[string][]string
+		// wantPause is a batch that stops for the broadcast to pause: the sender a variation
+		// chose is gone, which fails every recipient sent that variation
+		wantPause bool
+	}{
+		{
+			name: "variation sender wins over the template sender",
+			testSettings: domain.BroadcastTestSettings{
+				Variations: []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tpl-a", SenderID: senderTwo.ID}},
+			},
+			wantFrom: map[string][]string{"Subject A": {senderTwo.Email}},
+		},
+		{
+			name: "variation without a sender keeps the template sender",
+			testSettings: domain.BroadcastTestSettings{
+				Variations: []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tpl-a"}},
+			},
+			wantFrom: map[string][]string{"Subject A": {defaultSender.Email}},
+		},
+		{
+			name: "each A/B variation sends with its own sender",
+			testSettings: domain.BroadcastTestSettings{
+				Enabled: true,
+				Variations: []domain.BroadcastVariation{
+					{VariationName: "A", TemplateID: "tpl-a", SenderID: senderTwo.ID},
+					{VariationName: "B", TemplateID: "tpl-b", SenderID: senderThree.ID},
+				},
+			},
+			wantFrom: map[string][]string{"Subject A": {senderTwo.Email}, "Subject B": {senderThree.Email}},
+		},
+		{
+			name: "winner phase sends with the sender of the winning variation",
+			testSettings: domain.BroadcastTestSettings{
+				Enabled: true,
+				Variations: []domain.BroadcastVariation{
+					{VariationName: "A", TemplateID: "tpl-a", SenderID: senderTwo.ID},
+					{VariationName: "B", TemplateID: "tpl-b", SenderID: senderThree.ID},
+				},
+			},
+			winningTemplate: &winner,
+			wantFrom:        map[string][]string{"Subject B": {senderThree.Email}},
+		},
+		{
+			name: "missing variation sender pauses the broadcast instead of using the default",
+			testSettings: domain.BroadcastTestSettings{
+				Variations: []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tpl-a", SenderID: "sender-gone"}},
+			},
+			wantPause: true,
+		},
+		{
+			name: "missing sender of the winning variation pauses the broadcast in the winner phase",
+			testSettings: domain.BroadcastTestSettings{
+				Enabled: true,
+				Variations: []domain.BroadcastVariation{
+					{VariationName: "A", TemplateID: "tpl-a", SenderID: senderTwo.ID},
+					{VariationName: "B", TemplateID: "tpl-b", SenderID: "sender-gone"},
+				},
+			},
+			winningTemplate: &winner,
+			wantPause:       true,
+		},
+		{
+			// A variation is drawn per recipient, so a batch that met the missing sender of B
+			// only when B was first drawn would already have sent the recipients drawn A before
+			// it, without the orchestrator recording them: they would be sent again on resume.
+			// The sender check at the start of the batch is the only thing that pauses it: without
+			// it a recipient drawn B counts as failed and one drawn A is sent, an unexpected
+			// SendEmail, so this fails on every run whichever variation is drawn first
+			name: "missing sender of the second A/B variation pauses the batch before any recipient is sent",
+			testSettings: domain.BroadcastTestSettings{
+				Enabled: true,
+				Variations: []domain.BroadcastVariation{
+					{VariationName: "A", TemplateID: "tpl-a", SenderID: senderTwo.ID},
+					{VariationName: "B", TemplateID: "tpl-b", SenderID: "sender-gone"},
+				},
+			},
+			wantPause: true,
+		},
+		{
+			// Only the winning template is sent in the winner phase, so a sender gone from the
+			// losing variation is no reason to pause: every recipient gets the winner's From
+			name: "missing sender of the losing variation does not pause the winner phase",
+			testSettings: domain.BroadcastTestSettings{
+				Enabled: true,
+				Variations: []domain.BroadcastVariation{
+					{VariationName: "A", TemplateID: "tpl-a", SenderID: senderTwo.ID},
+					{VariationName: "B", TemplateID: "tpl-b", SenderID: "sender-gone"},
+				},
+			},
+			winningTemplate: &winnerA,
+			wantFrom:        map[string][]string{"Subject A": {senderTwo.Email}},
+		},
+		{
+			// With A/B testing off this path sends the first variation only, but the check covers
+			// every variation the broadcast carries, as the queue path (which draws among all of
+			// them) needs. Checking only the first variation would send every recipient here, an
+			// unexpected SendEmail
+			name: "missing sender of the second variation pauses the batch with A/B testing off",
+			testSettings: domain.BroadcastTestSettings{
+				Variations: []domain.BroadcastVariation{
+					{VariationName: "A", TemplateID: "tpl-a", SenderID: senderTwo.ID},
+					{VariationName: "B", TemplateID: "tpl-b", SenderID: "sender-gone"},
+				},
+			},
+			wantPause: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockBroadcastRepository := mocks.NewMockBroadcastRepository(ctrl)
+			mockMessageHistoryRepo := mocks.NewMockMessageHistoryRepository(ctrl)
+			mockTemplateRepo := mocks.NewMockTemplateRepository(ctrl)
+			mockEmailService := mocks.NewMockEmailServiceInterface(ctrl)
+			mockLogger := pkgmocks.NewMockLogger(ctrl)
+
+			mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
+			mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
+			mockLogger.EXPECT().Debug(gomock.Any()).Return().AnyTimes()
+			mockLogger.EXPECT().Info(gomock.Any()).Return().AnyTimes()
+			mockLogger.EXPECT().Warn(gomock.Any()).Return().AnyTimes()
+			mockLogger.EXPECT().Error(gomock.Any()).Return().AnyTimes()
+
+			ctx := context.Background()
+			workspaceID := "workspace-123"
+			broadcastID := "broadcast-123"
+			broadcast := &domain.Broadcast{
+				ID:              broadcastID,
+				WorkspaceID:     workspaceID,
+				Name:            "Test Broadcast",
+				ChannelType:     "email",
+				Audience:        domain.AudienceSettings{List: "list-1"},
+				Status:          domain.BroadcastStatusDraft,
+				UTMParameters:   &domain.UTMParameters{Source: "test", Medium: "email", Campaign: "unit-test"},
+				TestSettings:    tt.testSettings,
+				WinningTemplate: tt.winningTemplate,
+			}
+			mockBroadcastRepository.EXPECT().GetBroadcast(ctx, workspaceID, broadcastID).Return(broadcast, nil)
+			mockMessageHistoryRepo.EXPECT().Create(ctx, workspaceID, gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+			// A batch that pauses never reaches the email service: a SendEmail here is an unexpected call
+			observed := map[string]map[string]bool{}
+			if !tt.wantPause {
+				mockEmailService.EXPECT().
+					SendEmail(gomock.Any(), gomock.Any(), true).
+					DoAndReturn(func(_ context.Context, request domain.SendEmailProviderRequest, _ bool) error {
+						if observed[request.Subject] == nil {
+							observed[request.Subject] = map[string]bool{}
+						}
+						observed[request.Subject][request.FromAddress] = true
+						return nil
+					}).
+					AnyTimes()
+			}
+
+			sender := NewMessageSender(
+				mockBroadcastRepository,
+				mockMessageHistoryRepo,
+				mockTemplateRepo,
+				mockEmailService,
+				nil, // dataFeedFetcher
+				mockLogger,
+				TestConfig(),
+				"",
+			)
+
+			// Enough recipients that a random A/B pick uses every variation
+			recipients := make([]*domain.ContactWithList, 0, 40)
+			for i := 0; i < 40; i++ {
+				recipients = append(recipients, &domain.ContactWithList{
+					Contact:  &domain.Contact{Email: fmt.Sprintf("recipient%d@example.com", i)},
+					ListID:   "list-1",
+					ListName: "Test List",
+				})
+			}
+
+			sent, failed, err := sender.SendBatch(ctx, workspaceID, "test-integration-id", "secret-key-123", "https://api.example.com", "", testTrackingPolicy(true), nil, broadcastID, recipients, templates, emailProvider, time.Now().Add(30*time.Second), "")
+
+			if tt.wantPause {
+				// Counting the recipients as failed sends would let the orchestrator advance
+				// past all of them and mark the broadcast processed with nothing sent
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrBroadcastShouldPause)
+				assert.ErrorIs(t, err, domain.ErrSenderNotFound)
+				assert.Contains(t, err.Error(), "sender-gone")
+				assert.Equal(t, 0, sent)
+				assert.Equal(t, 0, failed)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, len(recipients), sent)
+			assert.Equal(t, 0, failed)
+			require.Len(t, observed, len(tt.wantFrom))
+			for subject, wantAddresses := range tt.wantFrom {
+				gotAddresses := make([]string, 0, len(observed[subject]))
+				for address := range observed[subject] {
+					gotAddresses = append(gotAddresses, address)
+				}
+				assert.ElementsMatch(t, wantAddresses, gotAddresses, "From addresses of %q", subject)
+			}
+		})
+	}
+}
+
+// TestSendToRecipient_SenderOverride tests the sender override of the variation that sends the template
+func TestSendToRecipient_SenderOverride(t *testing.T) {
+	defaultSender := domain.EmailSender{ID: "sender-default", Email: "default@example.com", Name: "Default", IsDefault: true}
+	senderTwo := domain.EmailSender{ID: "sender-two", Email: "two@example.com", Name: "Two"}
+	emailProvider := &domain.EmailProvider{
+		Kind:    domain.EmailProviderKindSMTP,
+		Senders: []domain.EmailSender{defaultSender, senderTwo},
+		SMTP:    &domain.SMTPSettings{Host: "smtp.example.com", Port: 587, Username: "user", Password: "pass", UseTLS: true},
+	}
+	template := &domain.Template{
+		ID: "tpl-a",
+		Email: &domain.EmailTemplate{
+			SenderID:         defaultSender.ID,
+			Subject:          "Subject A",
+			VisualEditorTree: createValidTestTree(createTestTextBlock("txt1", "Test content")),
+		},
+	}
+
+	tests := []struct {
+		name           string
+		variationID    string
+		wantFromEmail  string
+		wantSenderFail bool
+	}{
+		{name: "variation sender wins over the template sender", variationID: senderTwo.ID, wantFromEmail: senderTwo.Email},
+		{name: "variation without a sender keeps the template sender", wantFromEmail: defaultSender.Email},
+		{name: "missing variation sender fails the send instead of using the default", variationID: "sender-gone", wantSenderFail: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockBroadcastRepository := mocks.NewMockBroadcastRepository(ctrl)
+			mockMessageHistoryRepo := mocks.NewMockMessageHistoryRepository(ctrl)
+			mockTemplateRepo := mocks.NewMockTemplateRepository(ctrl)
+			mockEmailService := mocks.NewMockEmailServiceInterface(ctrl)
+			mockLogger := pkgmocks.NewMockLogger(ctrl)
+
+			mockLogger.EXPECT().WithField(gomock.Any(), gomock.Any()).Return(mockLogger).AnyTimes()
+			mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
+			mockLogger.EXPECT().Debug(gomock.Any()).Return().AnyTimes()
+			mockLogger.EXPECT().Error(gomock.Any()).Return().AnyTimes()
+
+			broadcast := &domain.Broadcast{
+				ID:            "broadcast-123",
+				WorkspaceID:   "workspace-123",
+				UTMParameters: &domain.UTMParameters{Source: "test", Medium: "email", Campaign: "unit-test"},
+				TestSettings: domain.BroadcastTestSettings{
+					Variations: []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tpl-a", SenderID: tt.variationID}},
+				},
+			}
+
+			if !tt.wantSenderFail {
+				mockEmailService.EXPECT().
+					SendEmail(gomock.Any(), gomock.Any(), true).
+					DoAndReturn(func(_ context.Context, request domain.SendEmailProviderRequest, _ bool) error {
+						assert.Equal(t, tt.wantFromEmail, request.FromAddress)
+						return nil
+					})
+			}
+
+			sender := NewMessageSender(mockBroadcastRepository, mockMessageHistoryRepo, mockTemplateRepo, mockEmailService, nil, mockLogger, TestConfig(), "")
+
+			err := sender.SendToRecipient(context.Background(), "workspace-123", "test-integration-id", "", "https://api.test.com", testTrackingDecision(true), nil, broadcast, "message-123", "test@example.com", template, map[string]interface{}{}, emailProvider, time.Now().Add(30*time.Second), "", "")
+
+			if tt.wantSenderFail {
+				require.Error(t, err)
+				broadcastErr, ok := err.(*BroadcastError)
+				require.True(t, ok)
+				assert.Equal(t, ErrCodeSenderNotFound, broadcastErr.Code)
+				assert.ErrorIs(t, err, domain.ErrSenderNotFound)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 // TestSendBatch_EmptyRecipients tests SendBatch with no recipients
 func TestSendBatch_EmptyRecipients(t *testing.T) {
 	// Create mock controller

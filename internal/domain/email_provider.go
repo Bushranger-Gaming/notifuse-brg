@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -170,6 +171,30 @@ func (e *EmailProvider) GetSender(id string) *EmailSender {
 	}
 
 	return nil
+}
+
+// ErrSenderNotFound is returned when a sender chosen on purpose does not exist on the email provider
+var ErrSenderNotFound = errors.New("sender not found")
+
+// ResolveSender returns the sender an email goes out with. A sender chosen on a
+// broadcast variation or an automation step (overrideSenderID) wins over the
+// template's sender (templateSenderID); an override that matches no sender is an
+// error, never a silent fall back to another sender.
+func (e *EmailProvider) ResolveSender(overrideSenderID string, templateSenderID string) (*EmailSender, error) {
+	if overrideSenderID != "" {
+		for i := range e.Senders {
+			if e.Senders[i].ID == overrideSenderID {
+				return &e.Senders[i], nil
+			}
+		}
+		return nil, fmt.Errorf("%w: %s", ErrSenderNotFound, overrideSenderID)
+	}
+
+	sender := e.GetSender(templateSenderID)
+	if sender == nil {
+		return nil, fmt.Errorf("no sender configured for email provider")
+	}
+	return sender, nil
 }
 
 // EncryptSecretKeys encrypts all secret keys in the email provider

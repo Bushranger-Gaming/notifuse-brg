@@ -21,6 +21,7 @@ import (
 	"github.com/golang/mock/gomock"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Helper function to create a test broadcast
@@ -494,6 +495,74 @@ func TestHandleCreate(t *testing.T) {
 		handler.HandleCreate(w, req)
 
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+
+	// A sender the workspace does not have is the caller's input: 400 naming it, not a 500
+	t.Run("VariationSenderNotFound", func(t *testing.T) {
+		createRequest := &domain.CreateBroadcastRequest{
+			WorkspaceID: "workspace123",
+			Name:        "Test Broadcast",
+			Audience: domain.AudienceSettings{
+				List:     "list123",
+				Segments: []string{"segment123"},
+			},
+			TestSettings: domain.BroadcastTestSettings{
+				Variations: []domain.BroadcastVariation{{VariationName: "A", TemplateID: "template123", SenderID: "sender-gone"}},
+			},
+		}
+
+		mockService.EXPECT().
+			CreateBroadcast(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, req *domain.CreateBroadcastRequest) (*domain.Broadcast, error) {
+				require.Len(t, req.TestSettings.Variations, 1)
+				assert.Equal(t, "sender-gone", req.TestSettings.Variations[0].SenderID)
+				return nil, domain.NewValidationError("variation 1: sender not found: sender-gone")
+			})
+
+		requestBody, _ := json.Marshal(createRequest)
+		req := httptest.NewRequest(http.MethodPost, "/api/broadcasts.create", bytes.NewBuffer(requestBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		handler.HandleCreate(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		var response map[string]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.Equal(t, "variation 1: sender not found: sender-gone", response["error"])
+	})
+
+	// Two variations that send the same template are refused before the service is asked:
+	// 400 naming the template, without the "validation error:" prefix of the domain error
+	t.Run("VariationsShareATemplate", func(t *testing.T) {
+		createRequest := &domain.CreateBroadcastRequest{
+			WorkspaceID: "workspace123",
+			Name:        "Test Broadcast",
+			Audience: domain.AudienceSettings{
+				List:     "list123",
+				Segments: []string{"segment123"},
+			},
+			TestSettings: domain.BroadcastTestSettings{
+				Enabled:          true,
+				SamplePercentage: 50,
+				Variations: []domain.BroadcastVariation{
+					{VariationName: "A", TemplateID: "template123"},
+					{VariationName: "B", TemplateID: "template123"},
+				},
+			},
+		}
+
+		requestBody, _ := json.Marshal(createRequest)
+		req := httptest.NewRequest(http.MethodPost, "/api/broadcasts.create", bytes.NewBuffer(requestBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		handler.HandleCreate(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		var response map[string]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.Equal(t, "variation 2: template template123 is already used by variation 1, each variation needs its own template", response["error"])
 	})
 
 	// Test invalid JSON
@@ -1418,6 +1487,82 @@ func TestHandleUpdate(t *testing.T) {
 		handler.HandleUpdate(w, req)
 
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+
+	// A sender the workspace does not have is the caller's input: 400 naming it, not a 500
+	t.Run("VariationSenderNotFound", func(t *testing.T) {
+		updateRequest := &domain.UpdateBroadcastRequest{
+			ID:          broadcast.ID,
+			WorkspaceID: broadcast.WorkspaceID,
+			Name:        "Updated Broadcast",
+			Audience: domain.AudienceSettings{
+				List:     "list123",
+				Segments: []string{"segment123"},
+			},
+			TestSettings: domain.BroadcastTestSettings{
+				Variations: []domain.BroadcastVariation{{VariationName: "A", TemplateID: "template123", SenderID: "sender-gone"}},
+			},
+		}
+
+		mockService.EXPECT().
+			GetBroadcast(gomock.Any(), broadcast.WorkspaceID, broadcast.ID).
+			Return(broadcast, nil)
+
+		mockService.EXPECT().
+			UpdateBroadcast(gomock.Any(), gomock.Any()).
+			Return(nil, domain.NewValidationError("variation 1: sender not found: sender-gone"))
+
+		requestBody, _ := json.Marshal(updateRequest)
+		req := httptest.NewRequest(http.MethodPost, "/api/broadcasts.update", bytes.NewBuffer(requestBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		handler.HandleUpdate(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		var response map[string]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.Equal(t, "variation 1: sender not found: sender-gone", response["error"])
+	})
+
+	// Two variations that send the same template are refused before the service is asked:
+	// 400 naming the template, without the "validation error:" prefix of the domain error
+	t.Run("VariationsShareATemplate", func(t *testing.T) {
+		updateRequest := &domain.UpdateBroadcastRequest{
+			ID:          broadcast.ID,
+			WorkspaceID: broadcast.WorkspaceID,
+			Name:        "Updated Broadcast",
+			Audience: domain.AudienceSettings{
+				List:     "list123",
+				Segments: []string{"segment123"},
+			},
+			TestSettings: domain.BroadcastTestSettings{
+				Enabled:          true,
+				SamplePercentage: 50,
+				Variations: []domain.BroadcastVariation{
+					{VariationName: "A", TemplateID: "template123"},
+					{VariationName: "B", TemplateID: "template123"},
+				},
+			},
+		}
+
+		// Validate applies the request to the broadcast it is given, so this one gets its own
+		existing := createTestBroadcast()
+		mockService.EXPECT().
+			GetBroadcast(gomock.Any(), broadcast.WorkspaceID, broadcast.ID).
+			Return(existing, nil)
+
+		requestBody, _ := json.Marshal(updateRequest)
+		req := httptest.NewRequest(http.MethodPost, "/api/broadcasts.update", bytes.NewBuffer(requestBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		handler.HandleUpdate(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		var response map[string]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.Equal(t, "variation 2: template template123 is already used by variation 1, each variation needs its own template", response["error"])
 	})
 
 	// Test invalid JSON

@@ -145,6 +145,7 @@ export interface DelayNodeConfig extends NodeConfigBase {
 export interface EmailNodeConfig extends NodeConfigBase {
   template_id: string
   integration_id?: string
+  sender_id?: string
   subject_override?: string
   from_override?: string
 }

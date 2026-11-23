@@ -1243,6 +1243,316 @@ func TestQueueMessageSender_SelectTemplate(t *testing.T) {
 	})
 }
 
+// newVariationSenderFixture holds what the variation sender tests share: an email provider
+// with a default and two other senders, and two templates that name the default sender
+func newVariationSenderFixture() (emailProvider *domain.EmailProvider, templates map[string]*domain.Template) {
+	emailProvider = &domain.EmailProvider{
+		Kind: domain.EmailProviderKindSMTP,
+		Senders: []domain.EmailSender{
+			{ID: "sender-default", Email: "default@example.com", Name: "Default", IsDefault: true},
+			{ID: "sender-two", Email: "two@example.com", Name: "Two"},
+			{ID: "sender-three", Email: "three@example.com", Name: "Three"},
+		},
+		RateLimitPerMinute: 100,
+	}
+	newTemplate := func(id string) *domain.Template {
+		return &domain.Template{
+			ID: id,
+			Email: &domain.EmailTemplate{
+				SenderID:         "sender-default",
+				Subject:          "Subject " + id,
+				VisualEditorTree: createQueueValidTestTree(createQueueTestTextBlock("txt1", "Hello")),
+			},
+		}
+	}
+	return emailProvider, map[string]*domain.Template{"tpl-a": newTemplate("tpl-a"), "tpl-b": newTemplate("tpl-b")}
+}
+
+func TestQueueMessageSender_VariationSender(t *testing.T) {
+	winner := "tpl-b"
+	winnerA := "tpl-a"
+
+	tests := []struct {
+		name            string
+		heldTemplates   []string
+		variations      []domain.BroadcastVariation
+		winningTemplate *string
+		// abTestOff keeps A/B testing off whatever the number of variations, which the API allows
+		abTestOff bool
+		// wantFrom is the From addresses expected for each template, whatever their order
+		wantFrom map[string][]string
+		// wantPause is a batch that stops for the broadcast to pause: the sender a variation
+		// chose is gone, which fails every recipient sent that variation
+		wantPause bool
+	}{
+		{
+			name:          "variation sender wins over the template sender",
+			heldTemplates: []string{"tpl-a"},
+			variations:    []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tpl-a", SenderID: "sender-two"}},
+			wantFrom:      map[string][]string{"tpl-a": {"two@example.com"}},
+		},
+		{
+			name:          "variation without a sender keeps the template sender",
+			heldTemplates: []string{"tpl-a"},
+			variations:    []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tpl-a"}},
+			wantFrom:      map[string][]string{"tpl-a": {"default@example.com"}},
+		},
+		{
+			name:          "each A/B variation sends with its own sender",
+			heldTemplates: []string{"tpl-a", "tpl-b"},
+			variations: []domain.BroadcastVariation{
+				{VariationName: "A", TemplateID: "tpl-a", SenderID: "sender-two"},
+				{VariationName: "B", TemplateID: "tpl-b", SenderID: "sender-three"},
+			},
+			wantFrom: map[string][]string{"tpl-a": {"two@example.com"}, "tpl-b": {"three@example.com"}},
+		},
+		{
+			// The losing template is held too: every recipient must still get the winner
+			name:          "winner phase sends every recipient the winning template with its variation's sender",
+			heldTemplates: []string{"tpl-a", "tpl-b"},
+			variations: []domain.BroadcastVariation{
+				{VariationName: "A", TemplateID: "tpl-a", SenderID: "sender-two"},
+				{VariationName: "B", TemplateID: "tpl-b", SenderID: "sender-three"},
+			},
+			winningTemplate: &winner,
+			wantFrom:        map[string][]string{"tpl-b": {"three@example.com"}},
+		},
+		{
+			name:          "missing variation sender pauses the broadcast instead of using the default",
+			heldTemplates: []string{"tpl-a"},
+			variations:    []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tpl-a", SenderID: "sender-gone"}},
+			wantPause:     true,
+		},
+		{
+			name:          "missing sender of the winning variation pauses the broadcast in the winner phase",
+			heldTemplates: []string{"tpl-b"},
+			variations: []domain.BroadcastVariation{
+				{VariationName: "A", TemplateID: "tpl-a", SenderID: "sender-two"},
+				{VariationName: "B", TemplateID: "tpl-b", SenderID: "sender-gone"},
+			},
+			winningTemplate: &winner,
+			wantPause:       true,
+		},
+		{
+			// The sender check at the start of the batch is the only thing that pauses it:
+			// without it a recipient drawn B counts as a build error and one drawn A is
+			// enqueued, an unexpected Enqueue, so this fails on every run whichever variation
+			// is drawn first
+			name:          "missing sender of the second A/B variation pauses the batch before anything is enqueued",
+			heldTemplates: []string{"tpl-a", "tpl-b"},
+			variations: []domain.BroadcastVariation{
+				{VariationName: "A", TemplateID: "tpl-a", SenderID: "sender-two"},
+				{VariationName: "B", TemplateID: "tpl-b", SenderID: "sender-gone"},
+			},
+			wantPause: true,
+		},
+		{
+			// Only the winning template is sent in the winner phase, so a sender gone from the
+			// losing variation is no reason to pause: every recipient gets the winner's From,
+			// whichever other templates are held
+			name:          "missing sender of the losing variation does not pause the winner phase",
+			heldTemplates: []string{"tpl-a", "tpl-b"},
+			variations: []domain.BroadcastVariation{
+				{VariationName: "A", TemplateID: "tpl-a", SenderID: "sender-two"},
+				{VariationName: "B", TemplateID: "tpl-b", SenderID: "sender-gone"},
+			},
+			winningTemplate: &winnerA,
+			wantFrom:        map[string][]string{"tpl-a": {"two@example.com"}},
+		},
+		{
+			// selectTemplate draws among every template the orchestrator loaded, A/B testing on or
+			// off, so a recipient can be drawn the second variation: the check at the start of the
+			// batch is the only thing that pauses it (without it the recipients drawn A are enqueued,
+			// an unexpected Enqueue, and the ones drawn B count as build errors)
+			name:          "missing sender of the second variation pauses the batch before anything is enqueued with A/B testing off",
+			heldTemplates: []string{"tpl-a", "tpl-b"},
+			abTestOff:     true,
+			variations: []domain.BroadcastVariation{
+				{VariationName: "A", TemplateID: "tpl-a", SenderID: "sender-two"},
+				{VariationName: "B", TemplateID: "tpl-b", SenderID: "sender-gone"},
+			},
+			wantPause: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockQueueRepo := mocks.NewMockEmailQueueRepository(ctrl)
+			mockBroadcastRepo := mocks.NewMockBroadcastRepository(ctrl)
+			mockLogger := pkgmocks.NewMockLogger(ctrl)
+			mockLogger.EXPECT().WithFields(gomock.Any()).Return(mockLogger).AnyTimes()
+			mockLogger.EXPECT().Debug(gomock.Any()).AnyTimes()
+			mockLogger.EXPECT().Warn(gomock.Any()).AnyTimes()
+			mockLogger.EXPECT().Error(gomock.Any()).AnyTimes()
+
+			emailProvider, allTemplates := newVariationSenderFixture()
+			held := map[string]*domain.Template{}
+			for _, id := range tt.heldTemplates {
+				held[id] = allTemplates[id]
+			}
+
+			broadcast := &domain.Broadcast{
+				ID:              "broadcast-1",
+				WorkspaceID:     "workspace-1",
+				Name:            "Test Broadcast",
+				UTMParameters:   &domain.UTMParameters{Source: "test", Medium: "email"},
+				TestSettings:    domain.BroadcastTestSettings{Enabled: len(tt.variations) > 1 && !tt.abTestOff, Variations: tt.variations},
+				WinningTemplate: tt.winningTemplate,
+			}
+			mockBroadcastRepo.EXPECT().GetBroadcast(gomock.Any(), "workspace-1", "broadcast-1").Return(broadcast, nil)
+
+			// A batch that pauses enqueues nothing: an Enqueue here is an unexpected call
+			observed := map[string]map[string]bool{}
+			enqueued := map[string]int{}
+			if !tt.wantPause {
+				mockQueueRepo.EXPECT().Enqueue(gomock.Any(), "workspace-1", gomock.Any()).
+					DoAndReturn(func(_ context.Context, _ string, entries []*domain.EmailQueueEntry) error {
+						for _, entry := range entries {
+							if observed[entry.TemplateID] == nil {
+								observed[entry.TemplateID] = map[string]bool{}
+							}
+							observed[entry.TemplateID][entry.Payload.FromAddress] = true
+							enqueued[entry.TemplateID]++
+						}
+						return nil
+					})
+			}
+
+			sender := NewQueueMessageSender(mockQueueRepo, mockBroadcastRepo, mocks.NewMockMessageHistoryRepository(ctrl), mocks.NewMockTemplateRepository(ctrl), nil, mockLogger, nil, "https://api.example.com")
+
+			// Enough recipients that a random A/B pick uses every variation
+			recipients := make([]*domain.ContactWithList, 0, 40)
+			for i := 0; i < 40; i++ {
+				recipients = append(recipients, &domain.ContactWithList{
+					Contact: &domain.Contact{Email: fmt.Sprintf("user%d@example.com", i)},
+					ListID:  "list-1",
+				})
+			}
+
+			sent, failed, err := sender.SendBatch(context.Background(), "workspace-1", "integration-1", "secret-key", "https://api.example.com", "", testTrackingPolicy(true), nil, "broadcast-1", recipients, held, emailProvider, time.Now().Add(5*time.Minute), "")
+
+			if tt.wantPause {
+				// Counting the recipients as failed builds would let the orchestrator advance
+				// past all of them and mark the broadcast processed with nothing enqueued
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrBroadcastShouldPause)
+				assert.ErrorIs(t, err, domain.ErrSenderNotFound)
+				assert.Contains(t, err.Error(), "sender-gone")
+				assert.Equal(t, 0, sent)
+				assert.Equal(t, 0, failed)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, len(recipients), sent)
+			assert.Equal(t, 0, failed)
+			if tt.winningTemplate != nil {
+				assert.Equal(t, len(recipients), enqueued[*tt.winningTemplate], "every recipient gets the winning template")
+			}
+			require.Len(t, observed, len(tt.wantFrom))
+			for templateID, wantAddresses := range tt.wantFrom {
+				gotAddresses := make([]string, 0, len(observed[templateID]))
+				for address := range observed[templateID] {
+					gotAddresses = append(gotAddresses, address)
+				}
+				assert.ElementsMatch(t, wantAddresses, gotAddresses, "From addresses of %q", templateID)
+			}
+		})
+	}
+}
+
+func TestQueueMessageSender_BuildQueueEntry_SenderOverride(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	sender := NewQueueMessageSender(
+		mocks.NewMockEmailQueueRepository(ctrl),
+		mocks.NewMockBroadcastRepository(ctrl),
+		mocks.NewMockMessageHistoryRepository(ctrl),
+		mocks.NewMockTemplateRepository(ctrl),
+		nil,
+		pkgmocks.NewMockLogger(ctrl),
+		nil,
+		"https://api.example.com",
+	)
+	qms := sender.(*queueMessageSender)
+
+	emailProvider, templates := newVariationSenderFixture()
+	broadcast := &domain.Broadcast{ID: "broadcast-1", WorkspaceID: "workspace-1", UTMParameters: &domain.UTMParameters{}}
+
+	build := func(senderID string) (*domain.EmailQueueEntry, error) {
+		return qms.buildQueueEntry(context.Background(), "workspace-1", "integration-1", "", "https://api.test.com",
+			testTrackingDecision(true), nil, broadcast, "msg-1", "user@example.com", templates["tpl-a"],
+			map[string]interface{}{}, emailProvider, "", "", senderID)
+	}
+
+	t.Run("override sender wins over the template sender", func(t *testing.T) {
+		entry, err := build("sender-two")
+		require.NoError(t, err)
+		assert.Equal(t, "two@example.com", entry.Payload.FromAddress)
+		assert.Equal(t, "Two", entry.Payload.FromName)
+		// The worker checks the sender is still on the provider before it sends the row
+		assert.Equal(t, "sender-two", entry.Payload.SenderID)
+	})
+
+	t.Run("empty override keeps the template sender", func(t *testing.T) {
+		entry, err := build("")
+		require.NoError(t, err)
+		assert.Equal(t, "default@example.com", entry.Payload.FromAddress)
+		assert.Empty(t, entry.Payload.SenderID, "the template's sender is not an override for the worker to check")
+	})
+
+	t.Run("missing override fails instead of using the default sender", func(t *testing.T) {
+		entry, err := build("sender-gone")
+		require.Error(t, err)
+		assert.Nil(t, entry)
+		assert.ErrorIs(t, err, domain.ErrSenderNotFound)
+		assert.Contains(t, err.Error(), "sender-gone")
+	})
+}
+
+func TestQueueMessageSender_SendToRecipient_VariationSender(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockQueueRepo := mocks.NewMockEmailQueueRepository(ctrl)
+	sender := NewQueueMessageSender(
+		mockQueueRepo,
+		mocks.NewMockBroadcastRepository(ctrl),
+		mocks.NewMockMessageHistoryRepository(ctrl),
+		mocks.NewMockTemplateRepository(ctrl),
+		nil,
+		pkgmocks.NewMockLogger(ctrl),
+		nil,
+		"https://api.example.com",
+	)
+
+	emailProvider, templates := newVariationSenderFixture()
+	broadcast := &domain.Broadcast{
+		ID:            "broadcast-1",
+		WorkspaceID:   "workspace-1",
+		UTMParameters: &domain.UTMParameters{},
+		TestSettings: domain.BroadcastTestSettings{
+			Variations: []domain.BroadcastVariation{{VariationName: "A", TemplateID: "tpl-a", SenderID: "sender-three"}},
+		},
+	}
+
+	mockQueueRepo.EXPECT().Enqueue(gomock.Any(), "workspace-1", gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, entries []*domain.EmailQueueEntry) error {
+			require.Len(t, entries, 1)
+			assert.Equal(t, "three@example.com", entries[0].Payload.FromAddress)
+			return nil
+		})
+
+	err := sender.SendToRecipient(context.Background(), "workspace-1", "integration-1", "", "https://api.test.com",
+		testTrackingDecision(true), nil, broadcast, "msg-1", "user@example.com", templates["tpl-a"],
+		map[string]interface{}{}, emailProvider, time.Now().Add(5*time.Minute), "", "")
+	require.NoError(t, err)
+}
+
 func TestQueueMessageSender_BuildQueueEntry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1314,6 +1624,7 @@ func TestQueueMessageSender_BuildQueueEntry(t *testing.T) {
 			emailProvider,
 			"",
 			"",
+			"",
 		)
 
 		require.NoError(t, err)
@@ -1377,6 +1688,7 @@ func TestQueueMessageSender_BuildQueueEntry(t *testing.T) {
 			emailProvider,
 			"",
 			"",
+			"",
 		)
 
 		require.NoError(t, err)
@@ -1414,6 +1726,7 @@ func TestQueueMessageSender_BuildQueueEntry(t *testing.T) {
 			template,
 			nil,
 			emailProvider,
+			"",
 			"",
 			"",
 		)
@@ -1457,6 +1770,7 @@ func TestQueueMessageSender_BuildQueueEntry(t *testing.T) {
 			template,
 			map[string]interface{}{},
 			emailProvider,
+			"",
 			"",
 			"",
 		)
@@ -1516,11 +1830,11 @@ func TestQueueMessageSender_ABVariantsPerRecipientUTMContent(t *testing.T) {
 
 	entryA, err := qms.buildQueueEntry(context.Background(), "workspace-1", "integration-1", "",
 		endpoint, testTrackingDecision(true), nil, broadcast, "msg-1", "recipient1@example.com", templateA,
-		map[string]interface{}{}, emailProvider, "", "")
+		map[string]interface{}{}, emailProvider, "", "", "")
 	require.NoError(t, err)
 	entryB, err := qms.buildQueueEntry(context.Background(), "workspace-1", "integration-1", "",
 		endpoint, testTrackingDecision(true), nil, broadcast, "msg-2", "recipient2@example.com", templateB,
-		map[string]interface{}{}, emailProvider, "", "")
+		map[string]interface{}{}, emailProvider, "", "", "")
 	require.NoError(t, err)
 
 	// Each recipient's queued HTML must carry their own variant ID in the
@@ -1575,7 +1889,7 @@ func TestQueueMessageSender_BuildQueueEntry_NilUTMParameters(t *testing.T) {
 
 	entry, err := qms.buildQueueEntry(context.Background(), "workspace-1", "integration-1", "",
 		"https://api.test.com", testTrackingDecision(true), nil, broadcast, "msg-1", "recipient@example.com", template,
-		map[string]interface{}{}, emailProvider, "", "")
+		map[string]interface{}{}, emailProvider, "", "", "")
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	assert.Nil(t, broadcast.UTMParameters, "nil UTM parameters must stay nil on the shared broadcast")
@@ -1862,7 +2176,7 @@ func TestQueueMessageSender_ListUnsubscribeHeaderFollowsExcludeUnsubscribed(t *t
 				entry, err := sender.buildQueueEntry(
 					context.Background(), "workspace-1", "integration-1", "", "https://api.example.com",
 					testTrackingDecision(true), nil, broadcastFor(tc.excludeUnsubscribed), "msg-1", "user@example.com",
-					template, data, emailProvider, "", "",
+					template, data, emailProvider, "", "", "",
 				)
 
 				require.NoError(t, err)

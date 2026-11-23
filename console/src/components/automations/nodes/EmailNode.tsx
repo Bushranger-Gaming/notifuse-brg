@@ -12,10 +12,20 @@ type EmailNodeProps = NodeProps<AutomationFlowNode>
 
 export const EmailNode: React.FC<EmailNodeProps> = ({ data, selected }) => {
   const { t } = useLingui()
-  const { templates } = useAutomation()
+  const { templates, workspace } = useAutomation()
   const config = data.config as Structural<EmailNodeConfig>
   const hasTemplate = !!config?.template_id
   const templateName = config?.template_id ? templates.find(tmpl => tmpl.id === config.template_id)?.name : undefined
+  // The sender chosen on the node, looked up among the senders of the provider the node sends
+  // through: its own integration, or the marketing provider the workspace default stands for.
+  // A sender the provider no longer has is shown by its id, because the send fails on it.
+  const providerId = config?.integration_id || workspace.settings.marketing_email_provider_id
+  const senderLabel = config?.sender_id
+    ? (workspace.integrations
+        ?.find((integration) => integration.id === providerId)
+        ?.email_provider?.senders?.find((sender) => sender.id === config.sender_id)?.email ??
+      config.sender_id)
+    : undefined
   const connection = useConnection()
   const isConnecting = connection.inProgress
   const targetHandleSize = isConnecting ? 16 : 10
@@ -44,7 +54,14 @@ export const EmailNode: React.FC<EmailNodeProps> = ({ data, selected }) => {
         onDelete={data.onDelete}
       >
         {hasTemplate ? (
-          <div>{templateName || t`Template set`}</div>
+          <>
+            <div>{templateName || t`Template set`}</div>
+            {senderLabel && (
+              <div className="truncate max-w-[200px]" title={senderLabel}>
+                {senderLabel}
+              </div>
+            )}
+          </>
         ) : (
           <div className="text-orange-500">{t`Select`}</div>
         )}

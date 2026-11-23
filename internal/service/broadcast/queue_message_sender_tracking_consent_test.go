@@ -157,7 +157,7 @@ func TestQueueMessageSender_BuildQueueEntry_MintsNoIdentityWithoutClickConsent(t
 			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			"https://track.example.com", decision, webAnalytics,
 			&domain.Broadcast{ID: "broadcast-1"}, "msg-1", "a@example.com", template,
-			map[string]interface{}{}, emailProvider, "", "")
+			map[string]interface{}{}, emailProvider, "", "", "")
 		require.NoError(t, err)
 		return entry
 	}

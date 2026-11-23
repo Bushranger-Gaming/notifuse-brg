@@ -109,6 +109,7 @@ func (b *BroadcastTestSettings) Scan(value interface{}) error {
 type BroadcastVariation struct {
 	VariationName string            `json:"variation_name"`
 	TemplateID    string            `json:"template_id"`
+	SenderID      string            `json:"sender_id,omitempty"` // Overrides the template's sender
 	Metrics       *VariationMetrics `json:"metrics,omitempty"`
 	// joined servers-side
 	Template *Template `json:"template,omitempty"`
@@ -132,6 +133,40 @@ func (v *BroadcastVariation) Scan(value interface{}) error {
 
 	cloned := bytes.Clone(b)
 	return json.Unmarshal(cloned, v)
+}
+
+// SenderIDForTemplate returns the sender override of the variation that sends templateID,
+// or "" when there is none. A template belongs to one variation, so the sender follows the
+// template a recipient gets.
+func (b *Broadcast) SenderIDForTemplate(templateID string) string {
+	if b == nil {
+		return ""
+	}
+	for _, v := range b.TestSettings.Variations {
+		if v.TemplateID == templateID {
+			return v.SenderID
+		}
+	}
+	return ""
+}
+
+// validateVariationTemplates checks that no two submitted variations send the same
+// template. A template belongs to one variation: the sender override, the metrics and the
+// winner all follow the template a recipient gets, so a template shared by two variations
+// cannot be told apart and the second of them would never be sent. A variation without a
+// template is left to Broadcast.Validate, which asks for one on an A/B test.
+func validateVariationTemplates(variations []BroadcastVariation) error {
+	usedBy := make(map[string]int, len(variations))
+	for i, variation := range variations {
+		if variation.TemplateID == "" {
+			continue
+		}
+		if first, used := usedBy[variation.TemplateID]; used {
+			return NewValidationError(fmt.Sprintf("variation %d: template %s is already used by variation %d, each variation needs its own template", i+1, variation.TemplateID, first))
+		}
+		usedBy[variation.TemplateID] = i + 1
+	}
+	return nil
 }
 
 // VariationMetrics contains performance metrics for a variation
@@ -547,6 +582,10 @@ func (r *CreateBroadcastRequest) Validate() (*Broadcast, error) {
 		return nil, err
 	}
 
+	if err := validateVariationTemplates(r.TestSettings.Variations); err != nil {
+		return nil, err
+	}
+
 	return broadcast, nil
 }
 
@@ -742,6 +781,15 @@ func (r *UpdateBroadcastRequest) Validate(existingBroadcast *Broadcast) (*Broadc
 
 	if err := existingBroadcast.Validate(); err != nil {
 		return nil, err
+	}
+
+	// Only the variations this request submits are checked, as for their senders: a request
+	// without test_settings leaves the stored ones alone, and a broadcast saved with a
+	// shared template must not be blocked from an unrelated edit such as a rename.
+	if !r.testSettingsOmitted {
+		if err := validateVariationTemplates(r.TestSettings.Variations); err != nil {
+			return nil, err
+		}
 	}
 
 	return existingBroadcast, nil

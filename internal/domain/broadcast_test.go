@@ -1512,6 +1512,158 @@ func TestBroadcastTestSettings_ValueScan(t *testing.T) {
 	assert.Contains(t, string(marshaled), `"variations":[]`, "Variations should be serialized as empty array, not null")
 }
 
+// TestBroadcastVariation_SenderID tests that a variation keeps its sender override through
+// JSON and the database round trip, and that an unset one is left out of the JSON
+func TestBroadcastVariation_SenderID(t *testing.T) {
+	t.Run("sender_id survives Value and Scan", func(t *testing.T) {
+		original := domain.BroadcastVariation{VariationName: "A", TemplateID: "template123", SenderID: "sender-1"}
+
+		value, err := original.Value()
+		require.NoError(t, err)
+		assert.Contains(t, string(value.([]byte)), `"sender_id":"sender-1"`)
+
+		var scanned domain.BroadcastVariation
+		require.NoError(t, scanned.Scan(value))
+		assert.Equal(t, "sender-1", scanned.SenderID)
+	})
+
+	t.Run("unset sender_id is omitted", func(t *testing.T) {
+		data, err := json.Marshal(domain.BroadcastVariation{VariationName: "A", TemplateID: "template123"})
+		require.NoError(t, err)
+		assert.NotContains(t, string(data), "sender_id")
+	})
+
+	t.Run("sender_id is read from the request body", func(t *testing.T) {
+		var variation domain.BroadcastVariation
+		require.NoError(t, json.Unmarshal([]byte(`{"variation_name":"A","template_id":"template123","sender_id":"sender-2"}`), &variation))
+		assert.Equal(t, "sender-2", variation.SenderID)
+	})
+}
+
+// TestBroadcast_SenderIDForTemplate tests the lookup of the sender override by template
+func TestBroadcast_SenderIDForTemplate(t *testing.T) {
+	broadcast := &domain.Broadcast{
+		TestSettings: domain.BroadcastTestSettings{
+			Variations: []domain.BroadcastVariation{
+				{VariationName: "A", TemplateID: "tpl-a", SenderID: "sender-a"},
+				{VariationName: "B", TemplateID: "tpl-b"},
+			},
+		},
+	}
+
+	assert.Equal(t, "sender-a", broadcast.SenderIDForTemplate("tpl-a"), "the variation that sends the template")
+	assert.Equal(t, "", broadcast.SenderIDForTemplate("tpl-b"), "a variation without an override")
+	assert.Equal(t, "", broadcast.SenderIDForTemplate("tpl-unknown"), "a template no variation sends")
+
+	var nilBroadcast *domain.Broadcast
+	assert.Equal(t, "", nilBroadcast.SenderIDForTemplate("tpl-a"))
+}
+
+// A template belongs to one variation, so the API refuses variations that share one, as the
+// console does. The refusal is a ValidationError naming the template, which the handler
+// answers with a 400.
+func TestBroadcastRequests_Validate_VariationsShareATemplate(t *testing.T) {
+	sharing := []domain.BroadcastVariation{
+		{VariationName: "A", TemplateID: "tpl-a"},
+		{VariationName: "B", TemplateID: "tpl-b"},
+		{VariationName: "C", TemplateID: "tpl-a"},
+	}
+	wantMessage := "variation 3: template tpl-a is already used by variation 1, each variation needs its own template"
+
+	t.Run("create refuses a template used by two variations", func(t *testing.T) {
+		req := domain.CreateBroadcastRequest{
+			WorkspaceID:  "workspace123",
+			Name:         "Newsletter",
+			Audience:     domain.AudienceSettings{List: "list123"},
+			TestSettings: domain.BroadcastTestSettings{Enabled: true, SamplePercentage: 50, Variations: sharing},
+		}
+
+		broadcast, err := req.Validate()
+		assert.Nil(t, broadcast)
+		var validationErr domain.ValidationError
+		require.ErrorAs(t, err, &validationErr)
+		assert.Equal(t, wantMessage, validationErr.Message)
+	})
+
+	t.Run("create refuses it with the A/B test switched off too", func(t *testing.T) {
+		req := domain.CreateBroadcastRequest{
+			WorkspaceID:  "workspace123",
+			Name:         "Newsletter",
+			Audience:     domain.AudienceSettings{List: "list123"},
+			TestSettings: domain.BroadcastTestSettings{Variations: sharing},
+		}
+
+		_, err := req.Validate()
+		var validationErr domain.ValidationError
+		require.ErrorAs(t, err, &validationErr)
+		assert.Equal(t, wantMessage, validationErr.Message)
+	})
+
+	t.Run("create accepts variations that each have their own template", func(t *testing.T) {
+		req := domain.CreateBroadcastRequest{
+			WorkspaceID: "workspace123",
+			Name:        "Newsletter",
+			Audience:    domain.AudienceSettings{List: "list123"},
+			TestSettings: domain.BroadcastTestSettings{Enabled: true, SamplePercentage: 50, Variations: []domain.BroadcastVariation{
+				{VariationName: "A", TemplateID: "tpl-a"},
+				{VariationName: "B", TemplateID: "tpl-b"},
+			}},
+		}
+
+		broadcast, err := req.Validate()
+		require.NoError(t, err)
+		assert.NotNil(t, broadcast)
+	})
+
+	t.Run("create does not count variations without a template as sharing one", func(t *testing.T) {
+		req := domain.CreateBroadcastRequest{
+			WorkspaceID: "workspace123",
+			Name:        "Newsletter",
+			Audience:    domain.AudienceSettings{List: "list123"},
+			TestSettings: domain.BroadcastTestSettings{Variations: []domain.BroadcastVariation{
+				{VariationName: "A"},
+				{VariationName: "B"},
+			}},
+		}
+
+		_, err := req.Validate()
+		require.NoError(t, err)
+	})
+
+	t.Run("update refuses the variations it submits when they share a template", func(t *testing.T) {
+		req := domain.UpdateBroadcastRequest{
+			WorkspaceID:  "workspace123",
+			ID:           "broadcast123",
+			Name:         "Renamed",
+			Audience:     domain.AudienceSettings{List: "list123"},
+			TestSettings: domain.BroadcastTestSettings{Enabled: true, SamplePercentage: 50, Variations: sharing},
+		}
+
+		updated, err := req.Validate(storedBroadcastWithOmittableFields())
+		assert.Nil(t, updated)
+		var validationErr domain.ValidationError
+		require.ErrorAs(t, err, &validationErr)
+		assert.Equal(t, wantMessage, validationErr.Message)
+	})
+
+	t.Run("update leaves a stored broadcast that shares a template editable when it submits no variations", func(t *testing.T) {
+		stored := storedBroadcastWithOmittableFields()
+		stored.TestSettings.Variations[1].TemplateID = "template-a"
+
+		var req domain.UpdateBroadcastRequest
+		require.NoError(t, json.Unmarshal([]byte(`{
+			"workspace_id": "workspace123",
+			"id": "broadcast123",
+			"name": "Renamed",
+			"audience": {"list": "list123", "exclude_unsubscribed": true}
+		}`), &req))
+
+		updated, err := req.Validate(stored)
+		require.NoError(t, err)
+		assert.Equal(t, "Renamed", updated.Name)
+	})
+}
+
 // TestBroadcastVariation_ValueScan tests the Value and Scan methods for BroadcastVariation
 func TestBroadcastVariation_ValueScan(t *testing.T) {
 	// Test serialization

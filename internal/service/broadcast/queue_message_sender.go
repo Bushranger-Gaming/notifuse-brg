@@ -73,8 +73,14 @@ func (s *queueMessageSender) SendToRecipient(
 	contactLanguage string,
 	workspaceDefaultLanguage string,
 ) error {
+	// The sender override is the one of the variation that carries the template
+	var senderID string
+	if template != nil {
+		senderID = broadcast.SenderIDForTemplate(template.ID)
+	}
+
 	// Build the email payload
-	entry, err := s.buildQueueEntry(ctx, workspaceID, integrationID, workspaceSecretKey, endpoint, decision, webAnalytics, broadcast, messageID, email, template, data, emailProvider, contactLanguage, workspaceDefaultLanguage)
+	entry, err := s.buildQueueEntry(ctx, workspaceID, integrationID, workspaceSecretKey, endpoint, decision, webAnalytics, broadcast, messageID, email, template, data, emailProvider, contactLanguage, workspaceDefaultLanguage, senderID)
 	if err != nil {
 		return err
 	}
@@ -120,6 +126,16 @@ func (s *queueMessageSender) SendBatch(
 		return 0, len(recipients), fmt.Errorf("failed to get broadcast: %w", err)
 	}
 
+	// A variation whose sender is gone pauses the broadcast before anything is built or enqueued
+	if err := checkVariationSenders(broadcast, emailProvider); err != nil {
+		s.logger.WithFields(map[string]interface{}{
+			"broadcast_id": broadcastID,
+			"workspace_id": workspaceID,
+			"error":        err.Error(),
+		}).Error("Variation sender not found, pausing broadcast")
+		return 0, 0, err
+	}
+
 	// Build queue entries
 	var entries []*domain.EmailQueueEntry
 	var buildErrors int
@@ -140,6 +156,9 @@ func (s *queueMessageSender) SendBatch(
 			buildErrors++
 			continue
 		}
+
+		// The sender override is the one of the variation that carries the template
+		senderID := broadcast.SenderIDForTemplate(template.ID)
 
 		// Generate message ID
 		messageID := fmt.Sprintf("%s_%s", workspaceID, uuid.New().String())
@@ -236,7 +255,7 @@ func (s *queueMessageSender) SendBatch(
 		}
 
 		// Build queue entry
-		entry, err := s.buildQueueEntry(ctx, workspaceID, integrationID, workspaceSecretKey, endpoint, decision, webAnalytics, broadcast, messageID, recipient.Contact.Email, template, data, emailProvider, contactLanguage, workspaceDefaultLanguage)
+		entry, err := s.buildQueueEntry(ctx, workspaceID, integrationID, workspaceSecretKey, endpoint, decision, webAnalytics, broadcast, messageID, recipient.Contact.Email, template, data, emailProvider, contactLanguage, workspaceDefaultLanguage, senderID)
 		if err != nil {
 			s.logger.WithFields(map[string]interface{}{
 				"broadcast_id": broadcastID,
@@ -299,6 +318,7 @@ func (s *queueMessageSender) buildQueueEntry(
 	emailProvider *domain.EmailProvider,
 	contactLanguage string,
 	workspaceDefaultLanguage string,
+	senderID string,
 ) (*domain.EmailQueueEntry, error) {
 	// Default utm_content on a per-recipient copy: the broadcast is shared
 	// across recipients and A/B variants differ per recipient, so the shared
@@ -353,10 +373,10 @@ func (s *queueMessageSender) buildQueueEntry(
 		return nil, fmt.Errorf("email content not available after language resolution")
 	}
 
-	// Get sender (use template's sender ID if specified, otherwise default)
-	sender := emailProvider.GetSender(emailContent.SenderID)
-	if sender == nil {
-		return nil, fmt.Errorf("no sender configured for email provider")
+	// Get sender (the variation's sender if set, else the template's sender ID, else the default)
+	sender, err := emailProvider.ResolveSender(senderID, emailContent.SenderID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Compile template with the provided data
@@ -416,6 +436,7 @@ func (s *queueMessageSender) buildQueueEntry(
 		Payload: domain.EmailQueuePayload{
 			FromAddress:        sender.Email,
 			FromName:           sender.Name,
+			SenderID:           senderID,
 			Subject:            subject,
 			HTMLContent:        htmlContent,
 			RateLimitPerMinute: emailProvider.RateLimitPerMinute,
@@ -449,6 +470,13 @@ func (s *queueMessageSender) buildQueueEntry(
 func (s *queueMessageSender) selectTemplate(templates map[string]*domain.Template, broadcast *domain.Broadcast) *domain.Template {
 	if len(templates) == 0 {
 		return nil
+	}
+
+	// Once a winner is selected every recipient gets it, whichever other templates are held
+	if broadcast != nil && broadcast.WinningTemplate != nil {
+		if winner, ok := templates[*broadcast.WinningTemplate]; ok {
+			return winner
+		}
 	}
 
 	// If only one template, use it

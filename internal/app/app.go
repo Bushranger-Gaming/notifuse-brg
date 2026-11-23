@@ -1198,6 +1198,7 @@ func (a *App) InitServices() error {
 	a.automationService = service.NewAutomationService(
 		a.automationRepo,
 		a.authService,
+		a.workspaceRepo,
 		a.logger,
 		a.config.Webhook.AllowPrivateDeliveryHosts,
 	)

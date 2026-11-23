@@ -26,6 +26,7 @@ import { useLingui } from '@lingui/react/macro'
 import {
   broadcastApi,
   Broadcast,
+  BroadcastVariation,
   TestResultsResponse,
   getStatusesForGroup
 } from '../services/api/broadcast'
@@ -69,8 +70,8 @@ import { BroadcastStats, ProgressStats } from '../components/broadcasts/Broadcas
 import { BroadcastLinkStats } from '../components/broadcasts/BroadcastLinkStats'
 import { SendingProgress } from '../components/broadcasts/SendingProgress'
 import { BroadcastAnalyticsLinks } from '../components/broadcasts/BroadcastAnalyticsLinks'
-import { Integration, List, Sender } from '../services/api/types'
-import SendTemplateModal from '../components/templates/SendTemplateModal'
+import { List } from '../services/api/types'
+import { SendVariationTestModal } from '../components/broadcasts/SendVariationTestModal'
 import { Workspace, UserPermissions } from '../services/api/types'
 import { Template } from '../services/api/template'
 import { Template as BroadcastTemplate } from '../services/api/broadcast'
@@ -81,6 +82,7 @@ import {
   type VariationRate,
   type VariationRowMetrics
 } from '../components/broadcasts/variationMetrics'
+import { getVariationSender } from '../components/broadcasts/variationSender'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -115,6 +117,83 @@ const getRemainingTestTime = (broadcast: Broadcast, testResults?: TestResultsRes
 
   // Use dayjs .to() method for natural time formatting
   return now.to(endTime, true) + ' remaining'
+}
+
+// The From line of a variation row
+export function VariationFrom({
+  variation,
+  workspace
+}: {
+  variation: BroadcastVariation
+  workspace: Workspace | undefined
+}) {
+  const { t } = useLingui()
+  return (
+    <div>
+      <span className="font-medium text-gray-500">{t`From:`}</span>{' '}
+      {getVariationSender(variation, workspace) ?? t`Default sender`}
+    </div>
+  )
+}
+
+// The Send Test Email button of a variation row, with the dialog it opens. The test goes through the
+// template test path (transactional.testTemplate), which asks for the Transactional write permission
+// and then reads the template, so it needs Templates read too. It leaves the marketing provider from
+// the sender the row shows in its From line, and is refused when the variation names a sender the
+// provider no longer has.
+export function VariationTestEmail({
+  workspaceId,
+  workspace,
+  variation,
+  permissions
+}: {
+  workspaceId: string
+  workspace: Workspace | undefined
+  variation: BroadcastVariation
+  permissions: UserPermissions | null
+}) {
+  const { t } = useLingui()
+  const [open, setOpen] = useState(false)
+  if (!variation.template_id) return null
+
+  const canWriteTransactional = !!permissions?.transactional?.write
+  const canReadTemplates = !!permissions?.templates?.read
+  const allowed = canWriteTransactional && canReadTemplates
+
+  return (
+    <>
+      <Tooltip
+        title={
+          allowed ? (
+            t`Send Test Email`
+          ) : (
+            <>
+              {!canWriteTransactional && (
+                <div>{t`You don't have write permission for transactional notifications`}</div>
+              )}
+              {!canReadTemplates && <div>{t`You don't have read permission for templates`}</div>}
+            </>
+          )
+        }
+      >
+        <Button
+          size="small"
+          type="text"
+          icon={<FontAwesomeIcon icon={faPaperPlane} className="opacity-70" />}
+          onClick={() => setOpen(true)}
+          disabled={!allowed}
+        />
+      </Tooltip>
+      {open && (
+        <SendVariationTestModal
+          workspaceId={workspaceId}
+          workspace={workspace}
+          variation={variation}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  )
 }
 
 // Under a variation's rate, a warning when fewer than half its recipients were
@@ -325,7 +404,7 @@ interface BroadcastCardProps {
   pageSize: number
 }
 
-const BroadcastCard: React.FC<BroadcastCardProps> = ({
+export const BroadcastCard: React.FC<BroadcastCardProps> = ({
   broadcast,
   lists,
   segments,
@@ -347,8 +426,6 @@ const BroadcastCard: React.FC<BroadcastCardProps> = ({
   const [showDetails, setShowDetails] = useState(isFirst)
   const queryClient = useQueryClient()
   const { message } = App.useApp()
-  const [testModalOpen, setTestModalOpen] = useState(false)
-  const [templateToTest, setTemplateToTest] = useState<Template | null>(null)
   const [progressStats, setProgressStats] = useState<ProgressStats | undefined>()
 
   const variations = broadcast.test_settings.variations || []
@@ -428,12 +505,6 @@ const BroadcastCard: React.FC<BroadcastCardProps> = ({
       message.error(t`Failed to select winner`)
       console.error(error)
     }
-  }
-
-  // Handler for testing a template
-  const handleTestTemplate = (template: Template) => {
-    setTemplateToTest(template)
-    setTestModalOpen(true)
   }
 
   // Helper function to render task status badge
@@ -818,18 +889,6 @@ const BroadcastCard: React.FC<BroadcastCardProps> = ({
               <Table
                 showHeader={false}
                 dataSource={(broadcast.test_settings.variations || []).map((variation, index) => {
-                  const emailProvider = currentWorkspace?.integrations?.find(
-                    (i: Integration) =>
-                      i.id ===
-                      (variation.template?.category === 'marketing'
-                        ? currentWorkspace.settings?.marketing_email_provider_id
-                        : currentWorkspace.settings?.transactional_email_provider_id)
-                  )?.email_provider
-
-                  const templateSender = emailProvider?.senders.find(
-                    (s: Sender) => s.id === variation.template?.email?.sender_id
-                  )
-
                   const variationResult = testResults?.variation_results?.[variation.template_id]
                   // Winner comes from live A/B results while testing, else from the
                   // winning_template recorded on the broadcast (top-level column) — so a
@@ -844,9 +903,6 @@ const BroadcastCard: React.FC<BroadcastCardProps> = ({
                     isWinner,
                     templateName: variation.template?.name || t`Untitled`,
                     template: variation.template,
-                    sender: templateSender
-                      ? `${templateSender.name} <${templateSender.email}>`
-                      : t`Default sender`,
                     subject: variation.template?.email?.subject || t`N/A`,
                     subjectPreview: variation.template?.email?.subject_preview,
                     replyTo: variation.template?.email?.reply_to || '-',
@@ -893,9 +949,7 @@ const BroadcastCard: React.FC<BroadcastCardProps> = ({
                     key: 'sender',
                     render: (record) => (
                       <div>
-                        <div>
-                          <span className="font-medium text-gray-500">{t`From:`}</span> {record.sender}
-                        </div>
+                        <VariationFrom variation={record.variation} workspace={currentWorkspace} />
                         {record.replyTo && record.replyTo !== '-' && (
                           <div>
                             <span className="font-medium text-gray-500">{t`Reply To:`}</span>{' '}
@@ -1007,27 +1061,12 @@ const BroadcastCard: React.FC<BroadcastCardProps> = ({
                             variationTemplateId={record.templateId ?? ''}
                             withDivider
                           />
-                          {record.template && (
-                            <Tooltip
-                              title={
-                                !(permissions?.templates?.read && permissions?.contacts?.write)
-                                  ? t`You need read template and write contact permissions to send test emails`
-                                  : t`Send Test Email`
-                              }
-                            >
-                              <Button
-                                size="small"
-                                type="text"
-                                icon={
-                                  <FontAwesomeIcon icon={faPaperPlane} className="opacity-70" />
-                                }
-                                onClick={() => record.template && handleTestTemplate(toTemplateApiType(record.template))}
-                                disabled={
-                                  !(permissions?.templates?.read && permissions?.contacts?.write)
-                                }
-                              />
-                            </Tooltip>
-                          )}
+                          <VariationTestEmail
+                            workspaceId={workspaceId}
+                            workspace={currentWorkspace}
+                            variation={record.variation}
+                            permissions={permissions}
+                          />
                           <Tooltip title={t`Preview Template`}>
                             <>
                               {record.template && currentWorkspace ? (
@@ -1294,16 +1333,6 @@ const BroadcastCard: React.FC<BroadcastCardProps> = ({
           </div>
         )}
       </div>
-
-      {/* Test Template Modal */}
-      {currentWorkspace && (
-        <SendTemplateModal
-          isOpen={testModalOpen}
-          onClose={() => setTestModalOpen(false)}
-          template={templateToTest}
-          workspace={currentWorkspace}
-        />
-      )}
     </Card>
   )
 }
