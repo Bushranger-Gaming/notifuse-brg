@@ -1397,8 +1397,11 @@ func (r *contactRepository) BulkUpsertContacts(ctx context.Context, workspaceID 
 	// Build the multi-row INSERT statement
 	// We'll use a raw SQL query because squirrel doesn't handle complex ON CONFLICT well
 	var queryBuilder strings.Builder
-	args := make([]interface{}, 0, len(contacts)*contactInsertFieldCount) // db_created_at and db_updated_at are managed by DB
+	args := make([]interface{}, 0, len(contacts)*contactInsertFieldCount+1) // db_created_at and db_updated_at are managed by DB
 	argIndex := 1
+
+	// Emails of the rows that came with their own created_at.
+	suppliedCreatedAt := make([]string, 0, len(contacts))
 
 	queryBuilder.WriteString(`INSERT INTO contacts (
 		` + contactInsertColumns + `
@@ -1424,11 +1427,24 @@ func (r *contactRepository) BulkUpsertContacts(ctx context.Context, workspaceID 
 
 		// Note: db_created_at and db_updated_at are NOT included - they have DEFAULT CURRENT_TIMESTAMP in the schema
 		args = append(args, contactInsertArgs(contact, now)...)
+		if !contact.CreatedAt.IsZero() {
+			suppliedCreatedAt = append(suppliedCreatedAt, contact.Email)
+		}
 	}
+
+	// One more parameter after every row's values: the emails collected above.
+	args = append(args, pq.Array(suppliedCreatedAt))
+	suppliedCreatedAtParam := "$" + strconv.Itoa(argIndex)
 
 	// Add ON CONFLICT clause with merge semantics
 	// For updates, we only update fields that were provided (non-null in the import)
 	// This preserves the merge behavior from the single upsert
+	//
+	// created_at follows the same rule. The VALUES column holds the date the row
+	// supplied, or now when it gave none: right for a new contact, but it makes
+	// EXCLUDED.created_at look the same either way, and writing it back reset every
+	// stored date to the import time. So a conflict replaces the stored date only
+	// for an email in suppliedCreatedAt and keeps it for the rest.
 	queryBuilder.WriteString(`
 	ON CONFLICT (email) DO UPDATE SET
 		external_id = CASE WHEN EXCLUDED.external_id IS NOT NULL THEN EXCLUDED.external_id ELSE contacts.external_id END,
@@ -1468,7 +1484,7 @@ func (r *contactRepository) BulkUpsertContacts(ctx context.Context, workspaceID 
 		tracking_clicks_consent = CASE WHEN EXCLUDED.tracking_clicks_consent IS NOT NULL THEN EXCLUDED.tracking_clicks_consent ELSE contacts.tracking_clicks_consent END,
 		tracking_consent_updated_at = CASE WHEN ` + bulkTrackingConsentChanged + ` THEN COALESCE(EXCLUDED.tracking_consent_updated_at, NOW()) ELSE contacts.tracking_consent_updated_at END,
 		tracking_consent_source = CASE WHEN ` + bulkTrackingConsentChanged + ` THEN EXCLUDED.tracking_consent_source ELSE contacts.tracking_consent_source END,
-		created_at = EXCLUDED.created_at,
+		created_at = CASE WHEN EXCLUDED.email = ANY(` + suppliedCreatedAtParam + `::text[]) THEN EXCLUDED.created_at ELSE contacts.created_at END,
 		updated_at = EXCLUDED.updated_at,
 		db_updated_at = NOW()
 	RETURNING email, (xmax = 0) AS is_new`)

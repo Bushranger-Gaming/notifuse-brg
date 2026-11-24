@@ -7906,7 +7906,7 @@
             "type": "string",
             "format": "date-time",
             "readOnly": true,
-            "description": "When the contact was created (read-only, set by server)",
+            "description": "When the contact was created. Set by the server unless a created_at was sent when the contact was created or imported (see ContactInput).",
             "example": "2023-01-15T10:30:00Z"
           },
           "updated_at": {
@@ -8178,6 +8178,13 @@
           },
           "custom_json_5": {
             "description": "Custom JSON field 5. Any JSON value the jsonb column can hold."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the contact was created. A new contact is dated now when it is left out (or null). On contacts.import a given date replaces an existing contact's stored date and a missing one keeps it; contacts.upsert uses it only when it creates the contact and never changes an existing contact's date. The instant must fall between years 1900 and 2100 in UTC. It is stored to the microsecond; finer digits are cut.",
+            "example": "2023-01-15T10:30:00Z"
           }
         }
       },

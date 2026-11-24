@@ -855,6 +855,27 @@ func FromJSON(data interface{}) (*Contact, error) {
 		Email: email,
 	}
 
+	// created_at is optional. Absent or null leaves CreatedAt zero, which the
+	// writers read as "not supplied" (a new contact is dated now, a stored one
+	// keeps its date). It goes through parseNullableTime so a bad value fails like
+	// the other time fields; a time in the future is accepted as given. The value
+	// is cut to microseconds, which is what PostgreSQL stores, and must then fall
+	// in years 1900 to 2100 in UTC. The range keeps to real dates, so offsets,
+	// database session time zones and storage rounding at the far ends of the
+	// calendar cannot produce a date that fails to read back (the zero time is
+	// year 1, so the range refuses it too).
+	var createdAt *NullableTime
+	if err := parseNullableTime(jsonResult, "created_at", &createdAt); err != nil {
+		return nil, err
+	}
+	if createdAt != nil && !createdAt.IsNull {
+		createdAtUTC := createdAt.Time.UTC().Truncate(time.Microsecond)
+		if year := createdAtUTC.Year(); year < 1900 || year > 2100 {
+			return nil, fmt.Errorf("created_at must fall between years 1900 and 2100 in UTC")
+		}
+		contact.CreatedAt = createdAtUTC
+	}
+
 	// Parse nullable string fields
 	if err := parseNullableString(jsonResult, "external_id", &contact.ExternalID); err != nil {
 		return nil, err
