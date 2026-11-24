@@ -2732,6 +2732,99 @@ func TestBatchImportContactsRequest_Validate_ErrorIndex(t *testing.T) {
 	assert.Len(t, contacts, 2, "Should parse both contacts even if one has invalid data")
 }
 
+func TestFromJSON_CreatedAt(t *testing.T) {
+	t.Run("a created_at is parsed", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"2020-03-04T05:06:07Z"}`)
+		require.NoError(t, err)
+		assert.True(t, contact.CreatedAt.Equal(time.Date(2020, 3, 4, 5, 6, 7, 0, time.UTC)))
+	})
+
+	t.Run("an offset is kept as the same instant", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"2020-03-04T05:06:07+02:00"}`)
+		require.NoError(t, err)
+		assert.True(t, contact.CreatedAt.Equal(time.Date(2020, 3, 4, 3, 6, 7, 0, time.UTC)))
+	})
+
+	t.Run("an absent created_at leaves it zero", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com"}`)
+		require.NoError(t, err)
+		assert.True(t, contact.CreatedAt.IsZero())
+	})
+
+	t.Run("a null created_at leaves it zero", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":null}`)
+		require.NoError(t, err)
+		assert.True(t, contact.CreatedAt.IsZero())
+	})
+
+	t.Run("a created_at in the future is accepted as given", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"2999-01-02T03:04:05Z"}`)
+		require.NoError(t, err)
+		assert.True(t, contact.CreatedAt.Equal(time.Date(2999, 1, 2, 3, 4, 5, 0, time.UTC)))
+	})
+
+	t.Run("a string that is not a time is an error", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"yesterday"}`)
+		require.Error(t, err)
+		assert.Nil(t, contact)
+		assert.Contains(t, err.Error(), "invalid time format for created_at")
+	})
+
+	t.Run("a value that is not a string is an error", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":1700000000}`)
+		require.Error(t, err)
+		assert.Nil(t, contact)
+		assert.Contains(t, err.Error(), "invalid type for created_at")
+	})
+}
+
+func TestBatchImportContactsRequest_Validate_CreatedAt(t *testing.T) {
+	req := BatchImportContactsRequest{
+		WorkspaceID: "ws_123",
+		Contacts: json.RawMessage(`[
+			{"email":"dated@example.com","created_at":"2020-03-04T05:06:07Z"},
+			{"email":"undated@example.com"},
+			{"email":"broken@example.com","created_at":"yesterday"}
+		]`),
+	}
+
+	contacts, _, err := req.Validate()
+	require.NoError(t, err, "a bad created_at fails its own contact, not the request")
+	require.Len(t, contacts, 3)
+
+	assert.Equal(t, "dated@example.com", contacts[0].Email)
+	assert.True(t, contacts[0].CreatedAt.Equal(time.Date(2020, 3, 4, 5, 6, 7, 0, time.UTC)))
+
+	assert.Equal(t, "undated@example.com", contacts[1].Email)
+	assert.True(t, contacts[1].CreatedAt.IsZero())
+
+	assert.Empty(t, contacts[2].Email, "the unparseable contact is the empty one the service rejects, at its own index")
+	assert.True(t, contacts[2].CreatedAt.IsZero())
+}
+
+func TestUpsertContactRequest_Validate_CreatedAt(t *testing.T) {
+	t.Run("the contact carries the created_at it was sent with", func(t *testing.T) {
+		req := UpsertContactRequest{
+			WorkspaceID: "ws_123",
+			Contact:     json.RawMessage(`{"email":"a@example.com","created_at":"2020-03-04T05:06:07Z"}`),
+		}
+		contact, _, err := req.Validate()
+		require.NoError(t, err)
+		assert.True(t, contact.CreatedAt.Equal(time.Date(2020, 3, 4, 5, 6, 7, 0, time.UTC)))
+	})
+
+	t.Run("a bad created_at rejects the contact", func(t *testing.T) {
+		req := UpsertContactRequest{
+			WorkspaceID: "ws_123",
+			Contact:     json.RawMessage(`{"email":"a@example.com","created_at":"yesterday"}`),
+		}
+		contact, _, err := req.Validate()
+		require.Error(t, err)
+		assert.Nil(t, contact)
+		assert.Contains(t, err.Error(), "created_at")
+	})
+}
+
 func TestComputeEmailHMAC_DeterministicAndKeySensitive(t *testing.T) {
 	email := "test@example.com"
 	key1 := "k1"

@@ -91,6 +91,22 @@ func TestContactBulkImportE2E(t *testing.T) {
 	t.Run("Duplicate Emails in Single Batch", func(t *testing.T) {
 		testDuplicateEmailsInBatch(t, client, workspaceDB, workspace.ID)
 	})
+
+	t.Run("Reimport Keeps and Replaces Created At", func(t *testing.T) {
+		testReimportCreatedAt(t, client, workspaceDB)
+	})
+
+	t.Run("New Contact Created At", func(t *testing.T) {
+		testNewContactCreatedAt(t, client, workspaceDB)
+	})
+
+	t.Run("Invalid Created At Fails Only Its Contact", func(t *testing.T) {
+		testInvalidCreatedAtInBatch(t, client, workspaceDB)
+	})
+
+	t.Run("Upsert Sets Created At On A New Contact", func(t *testing.T) {
+		testUpsertCreatedAt(t, client, workspaceDB, workspace.ID)
+	})
 }
 
 func testBulkInsertNewContacts(t *testing.T, client *testutil.APIClient, workspaceDB *sql.DB, workspaceID string) {
@@ -755,4 +771,179 @@ func testDuplicateEmailsInBatch(t *testing.T, client *testutil.APIClient, worksp
 	require.NoError(t, err)
 	assert.Equal(t, "Unique", firstName)
 	assert.Equal(t, "Contact", lastName)
+}
+
+// bulkImportOperation is one entry of the contacts.import response.
+type bulkImportOperation struct {
+	Email  string `json:"email"`
+	Action string `json:"action"`
+	Error  string `json:"error,omitempty"`
+}
+
+// importContactBatch sends contacts through contacts.import and returns the
+// operations the response reports.
+func importContactBatch(t *testing.T, client *testutil.APIClient, contacts []map[string]interface{}) []bulkImportOperation {
+	t.Helper()
+
+	resp, err := client.BatchImportContacts(contacts, nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var importResp struct {
+		Operations []bulkImportOperation `json:"operations"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&importResp))
+	return importResp.Operations
+}
+
+// requireAllImported fails unless every operation is the given action, without error.
+func requireAllImported(t *testing.T, ops []bulkImportOperation, action string, want int) {
+	t.Helper()
+
+	require.Len(t, ops, want)
+	for _, op := range ops {
+		require.Empty(t, op.Error, "import of %s failed", op.Email)
+		require.Equal(t, action, op.Action, "action for %s", op.Email)
+	}
+}
+
+// readContactDates returns the created_at and updated_at stored for a contact.
+func readContactDates(t *testing.T, workspaceDB *sql.DB, email string) (createdAt, updatedAt time.Time) {
+	t.Helper()
+
+	err := workspaceDB.QueryRow(
+		"SELECT created_at, updated_at FROM contacts WHERE email = $1",
+		email,
+	).Scan(&createdAt, &updatedAt)
+	require.NoError(t, err)
+	return createdAt, updatedAt
+}
+
+// testReimportCreatedAt covers contacts that already exist: a re-import that
+// does not name a created_at keeps the stored one, one that does replaces it,
+// and the two can sit in the same batch. updated_at moves on every re-import.
+func testReimportCreatedAt(t *testing.T, client *testutil.APIClient, workspaceDB *sql.DB) {
+	stamp := time.Now().UnixNano()
+	emailA := fmt.Sprintf("reimport_created_a_%d@example.com", stamp)
+	emailB := fmt.Sprintf("reimport_created_b_%d@example.com", stamp)
+
+	// First import, no created_at: both are created now.
+	requireAllImported(t, importContactBatch(t, client, []map[string]interface{}{
+		{"email": emailA, "first_name": "First"},
+		{"email": emailB, "first_name": "First"},
+	}), "create", 2)
+	createdA, updatedA := readContactDates(t, workspaceDB, emailA)
+	createdB, updatedB := readContactDates(t, workspaceDB, emailB)
+	assert.WithinDuration(t, time.Now(), createdA, 2*time.Minute)
+	assert.WithinDuration(t, time.Now(), createdB, 2*time.Minute)
+
+	// Re-import without created_at, as the player sync does every few minutes:
+	// created_at stays where it was and updated_at moves.
+	time.Sleep(200 * time.Millisecond)
+	requireAllImported(t, importContactBatch(t, client, []map[string]interface{}{
+		{"email": emailA, "first_name": "Second"},
+		{"email": emailB, "first_name": "Second"},
+	}), "update", 2)
+	reCreatedA, reUpdatedA := readContactDates(t, workspaceDB, emailA)
+	reCreatedB, reUpdatedB := readContactDates(t, workspaceDB, emailB)
+	assert.True(t, reCreatedA.Equal(createdA), "created_at was %s, a re-import without one left %s", createdA, reCreatedA)
+	assert.True(t, reCreatedB.Equal(createdB), "created_at was %s, a re-import without one left %s", createdB, reCreatedB)
+	assert.True(t, reUpdatedA.After(updatedA), "updated_at moves on a re-import")
+	assert.True(t, reUpdatedB.After(updatedB), "updated_at moves on a re-import")
+
+	// One batch with an explicit, older created_at for A and none for B: A takes
+	// the date it was given exactly, B keeps the one it has.
+	older := time.Date(2019, 5, 6, 7, 8, 9, 0, time.UTC)
+	time.Sleep(200 * time.Millisecond)
+	requireAllImported(t, importContactBatch(t, client, []map[string]interface{}{
+		{"email": emailA, "first_name": "Third", "created_at": older.Format(time.RFC3339)},
+		{"email": emailB, "first_name": "Third"},
+	}), "update", 2)
+	thirdCreatedA, thirdUpdatedA := readContactDates(t, workspaceDB, emailA)
+	thirdCreatedB, _ := readContactDates(t, workspaceDB, emailB)
+	assert.True(t, thirdCreatedA.Equal(older), "created_at supplied as %s was stored as %s", older, thirdCreatedA)
+	assert.True(t, thirdCreatedB.Equal(createdB), "created_at was %s, a batch row without one left %s", createdB, thirdCreatedB)
+	assert.True(t, thirdUpdatedA.After(reUpdatedA), "updated_at moves on a re-import")
+
+	// A later re-import without created_at keeps the date that was supplied.
+	requireAllImported(t, importContactBatch(t, client, []map[string]interface{}{
+		{"email": emailA, "first_name": "Fourth"},
+	}), "update", 1)
+	fourthCreatedA, _ := readContactDates(t, workspaceDB, emailA)
+	assert.True(t, fourthCreatedA.Equal(older), "created_at was %s, a re-import without one left %s", older, fourthCreatedA)
+}
+
+// testNewContactCreatedAt covers contacts that do not exist yet: one that names
+// a created_at is stored with it, one that does not is created now.
+func testNewContactCreatedAt(t *testing.T, client *testutil.APIClient, workspaceDB *sql.DB) {
+	stamp := time.Now().UnixNano()
+	datedEmail := fmt.Sprintf("new_dated_%d@example.com", stamp)
+	undatedEmail := fmt.Sprintf("new_undated_%d@example.com", stamp)
+	supplied := time.Date(2018, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	requireAllImported(t, importContactBatch(t, client, []map[string]interface{}{
+		{"email": datedEmail, "created_at": supplied.Format(time.RFC3339)},
+		{"email": undatedEmail},
+	}), "create", 2)
+
+	datedCreated, datedUpdated := readContactDates(t, workspaceDB, datedEmail)
+	assert.True(t, datedCreated.Equal(supplied), "created_at supplied as %s was stored as %s", supplied, datedCreated)
+	assert.WithinDuration(t, time.Now(), datedUpdated, 2*time.Minute, "updated_at is not taken from created_at")
+
+	undatedCreated, _ := readContactDates(t, workspaceDB, undatedEmail)
+	assert.WithinDuration(t, time.Now(), undatedCreated, 2*time.Minute)
+}
+
+// testInvalidCreatedAtInBatch checks that a created_at that is not a time fails
+// its own contact, at its index, and nothing else in the batch.
+func testInvalidCreatedAtInBatch(t *testing.T, client *testutil.APIClient, workspaceDB *sql.DB) {
+	stamp := time.Now().UnixNano()
+	goodEmail := fmt.Sprintf("created_good_%d@example.com", stamp)
+	badEmail := fmt.Sprintf("created_bad_%d@example.com", stamp)
+
+	ops := importContactBatch(t, client, []map[string]interface{}{
+		{"email": goodEmail},
+		{"email": badEmail, "created_at": "yesterday"},
+	})
+	require.Len(t, ops, 2)
+
+	var created, failed []bulkImportOperation
+	for _, op := range ops {
+		if op.Action == "error" {
+			failed = append(failed, op)
+		} else {
+			created = append(created, op)
+		}
+	}
+	require.Len(t, failed, 1)
+	require.Len(t, created, 1)
+	assert.Contains(t, failed[0].Error, "invalid contact at index 1")
+	assert.Equal(t, goodEmail, created[0].Email)
+	assert.Equal(t, "create", created[0].Action)
+
+	var count int
+	require.NoError(t, workspaceDB.QueryRow("SELECT COUNT(*) FROM contacts WHERE email = $1", badEmail).Scan(&count))
+	assert.Equal(t, 0, count, "the contact with the bad created_at is not stored")
+}
+
+// testUpsertCreatedAt checks contacts.upsert, which parses its contact through
+// the same FromJSON: a new contact sent with a created_at is stored with it.
+func testUpsertCreatedAt(t *testing.T, client *testutil.APIClient, workspaceDB *sql.DB, workspaceID string) {
+	email := fmt.Sprintf("upsert_created_%d@example.com", time.Now().UnixNano())
+	supplied := time.Date(2017, 11, 12, 13, 14, 15, 0, time.UTC)
+
+	resp, err := client.CreateContact(map[string]interface{}{
+		"workspace_id": workspaceID,
+		"contact": map[string]interface{}{
+			"email":      email,
+			"created_at": supplied.Format(time.RFC3339),
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	createdAt, _ := readContactDates(t, workspaceDB, email)
+	assert.True(t, createdAt.Equal(supplied), "created_at supplied as %s was stored as %s", supplied, createdAt)
 }
