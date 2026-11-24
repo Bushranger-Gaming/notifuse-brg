@@ -861,7 +861,10 @@ func FromJSON(data interface{}) (*Contact, error) {
 	// the other time fields; a time in the future is accepted as given. The zero
 	// instant (0001-01-01T00:00:00Z, in any offset) is refused: it would parse
 	// fine and then be read as "not supplied", so the contact would be dated now
-	// instead of failing.
+	// instead of failing. The instant must also fall in years 1 to 9999 in UTC: the
+	// writers store it in UTC, and a year outside that range (an offset can push
+	// 9999-12-31T23:30:00-01:00 into year 10000) cannot be encoded as JSON, so
+	// every read of that contact would return an empty body.
 	var createdAt *NullableTime
 	if err := parseNullableTime(jsonResult, "created_at", &createdAt); err != nil {
 		return nil, err
@@ -870,7 +873,11 @@ func FromJSON(data interface{}) (*Contact, error) {
 		if createdAt.Time.IsZero() {
 			return nil, fmt.Errorf("created_at must be a real date, not the zero time")
 		}
-		contact.CreatedAt = createdAt.Time
+		createdAtUTC := createdAt.Time.UTC()
+		if year := createdAtUTC.Year(); year < 1 || year > 9999 {
+			return nil, fmt.Errorf("created_at must fall between years 1 and 9999 in UTC")
+		}
+		contact.CreatedAt = createdAtUTC
 	}
 
 	// Parse nullable string fields

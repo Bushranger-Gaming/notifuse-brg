@@ -2797,6 +2797,43 @@ func TestFromJSON_CreatedAt(t *testing.T) {
 		assert.False(t, contact.CreatedAt.IsZero(), "one nanosecond past the zero time is a supplied date")
 		assert.True(t, contact.CreatedAt.Equal(time.Time{}.Add(time.Nanosecond)))
 	})
+
+	t.Run("an instant that is year 10000 in UTC is an error even when written as year 9999", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"9999-12-31T23:30:00-01:00"}`)
+		require.Error(t, err)
+		assert.Nil(t, contact)
+		assert.Contains(t, err.Error(), "created_at must fall between years 1 and 9999 in UTC")
+	})
+
+	t.Run("the first instant of year 10000 in UTC written with a negative offset is an error", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"9999-12-31T20:00:00-04:00"}`)
+		require.Error(t, err)
+		assert.Nil(t, contact)
+		assert.Contains(t, err.Error(), "created_at must fall between years 1 and 9999 in UTC")
+	})
+
+	t.Run("the last second of year 9999 in UTC is accepted and the contact encodes as JSON", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"9999-12-31T23:59:59Z"}`)
+		require.NoError(t, err)
+		assert.True(t, contact.CreatedAt.Equal(time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)))
+
+		_, err = json.Marshal(contact)
+		assert.NoError(t, err, "a contact accepted here must be readable back as JSON")
+	})
+
+	t.Run("a year-0 instant is an error", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"0000-12-31T23:59:59Z"}`)
+		require.Error(t, err)
+		assert.Nil(t, contact)
+		assert.Contains(t, err.Error(), "created_at")
+	})
+
+	t.Run("an instant that is year 0 in UTC is an error even when written as year 1", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"0001-01-01T00:30:00+01:00"}`)
+		require.Error(t, err)
+		assert.Nil(t, contact)
+		assert.Contains(t, err.Error(), "created_at must fall between years 1 and 9999 in UTC")
+	})
 }
 
 func TestBatchImportContactsRequest_Validate_CreatedAt(t *testing.T) {
