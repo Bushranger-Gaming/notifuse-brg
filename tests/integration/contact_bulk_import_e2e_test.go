@@ -116,6 +116,10 @@ func TestContactBulkImportE2E(t *testing.T) {
 	t.Run("Import Normalizes Deduplicates And Chunks Created At", func(t *testing.T) {
 		testImportDedupeKeepsLastCreatedAt(t, client, workspaceDB)
 	})
+
+	t.Run("Created At At The End Of Year 9999 Reads Back", func(t *testing.T) {
+		testCreatedAtEndOfYear9999ReadsBack(t, client, workspaceDB, workspace.ID)
+	})
 }
 
 func testBulkInsertNewContacts(t *testing.T, client *testutil.APIClient, workspaceDB *sql.DB, workspaceID string) {
@@ -1066,4 +1070,46 @@ func testImportDedupeKeepsLastCreatedAt(t *testing.T, client *testutil.APIClient
 
 	storedCreatedAt, _ := readContactDates(t, workspaceDB, email)
 	assert.True(t, storedCreatedAt.Equal(createdAt), "created_at was %s, the dated row it was deduplicated against left %s", createdAt, storedCreatedAt)
+}
+
+// testCreatedAtEndOfYear9999ReadsBack imports a created_at 100 nanoseconds
+// before year 10000. PostgreSQL keeps microseconds and rounds the rest, so
+// without the truncation in FromJSON it would be stored as year 10000 and every
+// JSON read of the contact would fail. The contact is deleted at the end so a
+// created_at in year 9999 cannot sort first in the list calls of other subtests.
+func testCreatedAtEndOfYear9999ReadsBack(t *testing.T, client *testutil.APIClient, workspaceDB *sql.DB, workspaceID string) {
+	email := fmt.Sprintf("created_year_9999_%d@example.com", time.Now().UnixNano())
+	defer func() {
+		resp, err := client.Post("/api/contacts.delete", map[string]interface{}{
+			"workspace_id": workspaceID,
+			"email":        email,
+		})
+		if assert.NoError(t, err) {
+			defer func() { _ = resp.Body.Close() }()
+			assert.Equal(t, http.StatusOK, resp.StatusCode, "the year 9999 contact is deleted at the end")
+		}
+	}()
+
+	requireAllImported(t, importContactBatch(t, client, []map[string]interface{}{
+		{"email": email, "created_at": "9999-12-31T23:59:59.9999999Z"},
+	}), "create", 1)
+
+	storedCreatedAt, _ := readContactDates(t, workspaceDB, email)
+	assert.True(t, storedCreatedAt.Equal(time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC)),
+		"created_at was stored as %s", storedCreatedAt)
+
+	resp, err := client.GetContactByEmail(email)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body struct {
+		Contact struct {
+			Email     string    `json:"email"`
+			CreatedAt time.Time `json:"created_at"`
+		} `json:"contact"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body), "the contact reads back as JSON")
+	assert.Equal(t, email, body.Contact.Email)
+	assert.Equal(t, 9999, body.Contact.CreatedAt.UTC().Year())
 }

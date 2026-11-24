@@ -2791,11 +2791,31 @@ func TestFromJSON_CreatedAt(t *testing.T) {
 		assert.Contains(t, err.Error(), "created_at must be a real date")
 	})
 
-	t.Run("the earliest instant after the zero time is accepted", func(t *testing.T) {
+	t.Run("one nanosecond past the zero time is an error because it is stored as the zero time", func(t *testing.T) {
 		contact, err := FromJSON(`{"email":"a@example.com","created_at":"0001-01-01T00:00:00.000000001Z"}`)
+		require.Error(t, err)
+		assert.Nil(t, contact)
+		assert.Contains(t, err.Error(), "created_at must be a real date")
+	})
+
+	t.Run("the earliest instant PostgreSQL can store after the zero time is accepted", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"0001-01-01T00:00:00.000001Z"}`)
 		require.NoError(t, err)
-		assert.False(t, contact.CreatedAt.IsZero(), "one nanosecond past the zero time is a supplied date")
-		assert.True(t, contact.CreatedAt.Equal(time.Time{}.Add(time.Nanosecond)))
+		assert.False(t, contact.CreatedAt.IsZero(), "one microsecond past the zero time is a supplied date")
+		assert.True(t, contact.CreatedAt.Equal(time.Time{}.Add(time.Microsecond)))
+	})
+
+	t.Run("a created_at with nanoseconds is stored truncated to microseconds", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"2020-03-04T05:06:07.123456789Z"}`)
+		require.NoError(t, err)
+		assert.True(t, contact.CreatedAt.Equal(time.Date(2020, 3, 4, 5, 6, 7, 123456000, time.UTC)))
+		assert.Equal(t, 123456000, contact.CreatedAt.Nanosecond())
+	})
+
+	t.Run("a created_at is truncated, not rounded, to microseconds", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"2020-03-04T05:06:07.123456999Z"}`)
+		require.NoError(t, err)
+		assert.Equal(t, 123456000, contact.CreatedAt.Nanosecond())
 	})
 
 	t.Run("an instant that is year 10000 in UTC is an error even when written as year 9999", func(t *testing.T) {
@@ -2816,6 +2836,16 @@ func TestFromJSON_CreatedAt(t *testing.T) {
 		contact, err := FromJSON(`{"email":"a@example.com","created_at":"9999-12-31T23:59:59Z"}`)
 		require.NoError(t, err)
 		assert.True(t, contact.CreatedAt.Equal(time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)))
+
+		_, err = json.Marshal(contact)
+		assert.NoError(t, err, "a contact accepted here must be readable back as JSON")
+	})
+
+	t.Run("the last nanosecond of year 9999 in UTC is accepted and stored truncated to microseconds", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"9999-12-31T23:59:59.999999999Z"}`)
+		require.NoError(t, err)
+		assert.True(t, contact.CreatedAt.Equal(time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC)))
+		assert.Equal(t, 9999, contact.CreatedAt.Year(), "rounding to microseconds would carry into year 10000")
 
 		_, err = json.Marshal(contact)
 		assert.NoError(t, err, "a contact accepted here must be readable back as JSON")
