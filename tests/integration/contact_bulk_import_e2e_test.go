@@ -117,8 +117,12 @@ func TestContactBulkImportE2E(t *testing.T) {
 		testImportDedupeKeepsLastCreatedAt(t, client, workspaceDB)
 	})
 
-	t.Run("Created At At The End Of Year 9999 Reads Back", func(t *testing.T) {
-		testCreatedAtEndOfYear9999ReadsBack(t, client, workspaceDB, workspace.ID)
+	t.Run("Created At Beyond Year 2100 Fails Only Its Contact", func(t *testing.T) {
+		testCreatedAtBeyondRangeFailsItsContact(t, client, workspaceDB)
+	})
+
+	t.Run("Created At At The End Of Year 2100 Reads Back", func(t *testing.T) {
+		testCreatedAtEndOfYear2100ReadsBack(t, client, workspaceDB, workspace.ID)
 	})
 }
 
@@ -1072,13 +1076,47 @@ func testImportDedupeKeepsLastCreatedAt(t *testing.T, client *testutil.APIClient
 	assert.True(t, storedCreatedAt.Equal(createdAt), "created_at was %s, the dated row it was deduplicated against left %s", createdAt, storedCreatedAt)
 }
 
-// testCreatedAtEndOfYear9999ReadsBack imports a created_at 100 nanoseconds
-// before year 10000. PostgreSQL keeps microseconds and rounds the rest, so
-// without the truncation in FromJSON it would be stored as year 10000 and every
-// JSON read of the contact would fail. The contact is deleted at the end so a
-// created_at in year 9999 cannot sort first in the list calls of other subtests.
-func testCreatedAtEndOfYear9999ReadsBack(t *testing.T, client *testutil.APIClient, workspaceDB *sql.DB, workspaceID string) {
-	email := fmt.Sprintf("created_year_9999_%d@example.com", time.Now().UnixNano())
+// testCreatedAtBeyondRangeFailsItsContact imports a created_at at the end of
+// year 9999, outside the years 1900 to 2100 the import accepts. Its row fails at
+// its own index and the contact is not stored, while the row beside it is.
+func testCreatedAtBeyondRangeFailsItsContact(t *testing.T, client *testutil.APIClient, workspaceDB *sql.DB) {
+	stamp := time.Now().UnixNano()
+	goodEmail := fmt.Sprintf("created_in_range_%d@example.com", stamp)
+	farEmail := fmt.Sprintf("created_year_9999_%d@example.com", stamp)
+
+	ops := importContactBatch(t, client, []map[string]interface{}{
+		{"email": goodEmail},
+		{"email": farEmail, "created_at": "9999-12-31T23:59:59.9999999Z"},
+	})
+	require.Len(t, ops, 2)
+
+	var created, failed []bulkImportOperation
+	for _, op := range ops {
+		if op.Action == "error" {
+			failed = append(failed, op)
+		} else {
+			created = append(created, op)
+		}
+	}
+	require.Len(t, failed, 1)
+	require.Len(t, created, 1)
+	assert.Contains(t, failed[0].Error, "invalid contact at index 1")
+	assert.Equal(t, goodEmail, created[0].Email)
+	assert.Equal(t, "create", created[0].Action)
+
+	var count int
+	require.NoError(t, workspaceDB.QueryRow("SELECT COUNT(*) FROM contacts WHERE email = $1", farEmail).Scan(&count))
+	assert.Equal(t, 0, count, "the contact with a created_at in year 9999 is not stored")
+}
+
+// testCreatedAtEndOfYear2100ReadsBack imports a created_at 100 nanoseconds
+// before 2101. PostgreSQL keeps microseconds and rounds the rest, so without the
+// truncation in FromJSON it would be stored in 2101, outside the accepted range.
+// The contact must be stored at the microsecond and read back as JSON. It is
+// deleted at the end so a created_at in 2100 cannot sort first in the list calls
+// of other subtests.
+func testCreatedAtEndOfYear2100ReadsBack(t *testing.T, client *testutil.APIClient, workspaceDB *sql.DB, workspaceID string) {
+	email := fmt.Sprintf("created_year_2100_%d@example.com", time.Now().UnixNano())
 	defer func() {
 		resp, err := client.Post("/api/contacts.delete", map[string]interface{}{
 			"workspace_id": workspaceID,
@@ -1086,16 +1124,16 @@ func testCreatedAtEndOfYear9999ReadsBack(t *testing.T, client *testutil.APIClien
 		})
 		if assert.NoError(t, err) {
 			defer func() { _ = resp.Body.Close() }()
-			assert.Equal(t, http.StatusOK, resp.StatusCode, "the year 9999 contact is deleted at the end")
+			assert.Equal(t, http.StatusOK, resp.StatusCode, "the year 2100 contact is deleted at the end")
 		}
 	}()
 
 	requireAllImported(t, importContactBatch(t, client, []map[string]interface{}{
-		{"email": email, "created_at": "9999-12-31T23:59:59.9999999Z"},
+		{"email": email, "created_at": "2100-12-31T23:59:59.9999999Z"},
 	}), "create", 1)
 
 	storedCreatedAt, _ := readContactDates(t, workspaceDB, email)
-	assert.True(t, storedCreatedAt.Equal(time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC)),
+	assert.True(t, storedCreatedAt.Equal(time.Date(2100, 12, 31, 23, 59, 59, 999999000, time.UTC)),
 		"created_at was stored as %s", storedCreatedAt)
 
 	resp, err := client.GetContactByEmail(email)
@@ -1111,5 +1149,5 @@ func testCreatedAtEndOfYear9999ReadsBack(t *testing.T, client *testutil.APIClien
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body), "the contact reads back as JSON")
 	assert.Equal(t, email, body.Contact.Email)
-	assert.Equal(t, 9999, body.Contact.CreatedAt.UTC().Year())
+	assert.Equal(t, 2100, body.Contact.CreatedAt.UTC().Year())
 }

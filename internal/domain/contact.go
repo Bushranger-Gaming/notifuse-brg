@@ -858,28 +858,20 @@ func FromJSON(data interface{}) (*Contact, error) {
 	// created_at is optional. Absent or null leaves CreatedAt zero, which the
 	// writers read as "not supplied" (a new contact is dated now, a stored one
 	// keeps its date). It goes through parseNullableTime so a bad value fails like
-	// the other time fields; a time in the future is accepted as given. The zero
-	// instant (0001-01-01T00:00:00Z, in any offset) is refused: it would parse
-	// fine and then be read as "not supplied", so the contact would be dated now
-	// instead of failing. The instant must also fall in years 1 to 9999 in UTC: the
-	// writers store it in UTC, and a year outside that range (an offset can push
-	// 9999-12-31T23:30:00-01:00 into year 10000) cannot be encoded as JSON, so
-	// every read of that contact would return an empty body. PostgreSQL keeps
-	// microseconds and rounds the rest, so the value is cut to microseconds first
-	// and both checks run on the value that will be stored:
-	// 9999-12-31T23:59:59.9999999Z would otherwise pass and be stored as year 10000,
-	// and 0001-01-01T00:00:00.000000001Z would pass and be stored as the zero time.
+	// the other time fields; a time in the future is accepted as given. The value
+	// is cut to microseconds, which is what PostgreSQL stores, and must then fall
+	// in years 1900 to 2100 in UTC. The range keeps to real dates, so offsets,
+	// database session time zones and storage rounding at the far ends of the
+	// calendar cannot produce a date that fails to read back (the zero time is
+	// year 1, so the range refuses it too).
 	var createdAt *NullableTime
 	if err := parseNullableTime(jsonResult, "created_at", &createdAt); err != nil {
 		return nil, err
 	}
 	if createdAt != nil && !createdAt.IsNull {
 		createdAtUTC := createdAt.Time.UTC().Truncate(time.Microsecond)
-		if createdAtUTC.IsZero() {
-			return nil, fmt.Errorf("created_at must be a real date, not the zero time")
-		}
-		if year := createdAtUTC.Year(); year < 1 || year > 9999 {
-			return nil, fmt.Errorf("created_at must fall between years 1 and 9999 in UTC")
+		if year := createdAtUTC.Year(); year < 1900 || year > 2100 {
+			return nil, fmt.Errorf("created_at must fall between years 1900 and 2100 in UTC")
 		}
 		contact.CreatedAt = createdAtUTC
 	}

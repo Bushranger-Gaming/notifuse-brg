@@ -8183,7 +8183,7 @@
             "type": "string",
             "format": "date-time",
             "nullable": true,
-            "description": "When the contact was created. A new contact is dated now when it is left out (or null). On contacts.import a given date replaces an existing contact's stored date and a missing one keeps it; contacts.upsert uses it only when it creates the contact and never changes an existing contact's date. The instant must fall between years 1 and 9999 in UTC, and the zero time (0001-01-01T00:00:00Z) is refused.",
+            "description": "When the contact was created. A new contact is dated now when it is left out (or null). On contacts.import a given date replaces an existing contact's stored date and a missing one keeps it; contacts.upsert uses it only when it creates the contact and never changes an existing contact's date. The instant must fall between years 1900 and 2100 in UTC. It is stored to the microsecond; finer digits are cut.",
             "example": "2023-01-15T10:30:00Z"
           }
         }
