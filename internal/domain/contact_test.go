@@ -2776,6 +2776,27 @@ func TestFromJSON_CreatedAt(t *testing.T) {
 		assert.Nil(t, contact)
 		assert.Contains(t, err.Error(), "invalid type for created_at")
 	})
+
+	t.Run("the zero instant in UTC is an error", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"0001-01-01T00:00:00Z"}`)
+		require.Error(t, err)
+		assert.Nil(t, contact)
+		assert.Contains(t, err.Error(), "created_at must be a real date")
+	})
+
+	t.Run("the zero instant written with an offset is an error", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"0001-01-01T02:00:00+02:00"}`)
+		require.Error(t, err)
+		assert.Nil(t, contact)
+		assert.Contains(t, err.Error(), "created_at must be a real date")
+	})
+
+	t.Run("the earliest instant after the zero time is accepted", func(t *testing.T) {
+		contact, err := FromJSON(`{"email":"a@example.com","created_at":"0001-01-01T00:00:00.000000001Z"}`)
+		require.NoError(t, err)
+		assert.False(t, contact.CreatedAt.IsZero(), "one nanosecond past the zero time is a supplied date")
+		assert.True(t, contact.CreatedAt.Equal(time.Time{}.Add(time.Nanosecond)))
+	})
 }
 
 func TestBatchImportContactsRequest_Validate_CreatedAt(t *testing.T) {

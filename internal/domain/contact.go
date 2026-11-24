@@ -858,12 +858,18 @@ func FromJSON(data interface{}) (*Contact, error) {
 	// created_at is optional. Absent or null leaves CreatedAt zero, which the
 	// writers read as "not supplied" (a new contact is dated now, a stored one
 	// keeps its date). It goes through parseNullableTime so a bad value fails like
-	// the other time fields; a time in the future is accepted as given.
+	// the other time fields; a time in the future is accepted as given. The zero
+	// instant (0001-01-01T00:00:00Z, in any offset) is refused: it would parse
+	// fine and then be read as "not supplied", so the contact would be dated now
+	// instead of failing.
 	var createdAt *NullableTime
 	if err := parseNullableTime(jsonResult, "created_at", &createdAt); err != nil {
 		return nil, err
 	}
 	if createdAt != nil && !createdAt.IsNull {
+		if createdAt.Time.IsZero() {
+			return nil, fmt.Errorf("created_at must be a real date, not the zero time")
+		}
 		contact.CreatedAt = createdAt.Time
 	}
 
