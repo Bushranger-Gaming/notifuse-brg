@@ -31,7 +31,10 @@ type Config struct {
 	// automation webhook nodes this deployment posts to. Not to be confused with
 	// WebhookEndpoint below, which is the public address email providers post
 	// INBOUND events to.
-	Webhook             WebhookConfig
+	Webhook WebhookConfig
+	// NovuBridge is the CRM bridge that automation novu_message nodes send in-app and push
+	// messages through. Server settings only: a flow never carries the address or the secret.
+	NovuBridge          NovuBridgeConfig
 	TaskScheduler       TaskSchedulerConfig
 	AutomationScheduler AutomationSchedulerConfig
 	EmailQueue          EmailQueueConfig
@@ -246,6 +249,23 @@ type WebhookConfig struct {
 	// webhook_subscriptions:write and of automations:write alike with the
 	// deployment's network.
 	AllowPrivateDeliveryHosts bool
+}
+
+// NovuBridgeConfig holds the address and the secret of the CRM bridge that automation
+// novu_message nodes call. Both come from the environment only and both are needed: with either
+// unset the node fails with a clear error and the workflow list answers "not configured".
+type NovuBridgeConfig struct {
+	// URL is the base address of the bridge, e.g. http://bridge:8090 (BRG_NOVU_BRIDGE_URL). It
+	// is set by the operator, so requests to it are not held to the private-address guard that
+	// webhook nodes (whose URL a workspace member types) are.
+	URL string
+	// Secret is sent as a Bearer token (BRG_NOVU_BRIDGE_SECRET). Never logged.
+	Secret string
+}
+
+// Configured reports whether both the address and the secret are set.
+func (c NovuBridgeConfig) Configured() bool {
+	return strings.TrimSpace(c.URL) != "" && c.Secret != ""
 }
 
 type TaskSchedulerConfig struct {
@@ -1117,6 +1137,10 @@ func LoadWithOptions(opts LoadOptions) (*Config, error) {
 		},
 		Webhook: WebhookConfig{
 			AllowPrivateDeliveryHosts: v.GetBool("WEBHOOK_DELIVERY_ALLOW_PRIVATE_HOSTS"),
+		},
+		NovuBridge: NovuBridgeConfig{
+			URL:    strings.TrimSpace(v.GetString("BRG_NOVU_BRIDGE_URL")),
+			Secret: v.GetString("BRG_NOVU_BRIDGE_SECRET"),
 		},
 		Broadcast: BroadcastConfig{
 			DefaultRateLimit:          v.GetInt("BROADCAST_DEFAULT_RATE_LIMIT"),

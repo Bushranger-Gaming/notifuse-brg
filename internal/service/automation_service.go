@@ -23,6 +23,8 @@ type AutomationService struct {
 	// relaxes the save-time check on webhook node URLs; the dial-time guard on the
 	// node's client is configured from the same setting in app wiring.
 	allowPrivateWebhookHosts bool
+	// novuBridge answers the workflow list of novu_message nodes; nil until SetNovuBridge.
+	novuBridge *NovuBridge
 }
 
 // NewAutomationService creates a new AutomationService
@@ -40,6 +42,12 @@ func NewAutomationService(
 		logger:                   logger,
 		allowPrivateWebhookHosts: allowPrivateWebhookHosts,
 	}
+}
+
+// SetNovuBridge sets the CRM bridge that ListNovuWorkflows asks. Without it the list answers
+// that the bridge is not set up.
+func (s *AutomationService) SetNovuBridge(bridge *NovuBridge) {
+	s.novuBridge = bridge
 }
 
 // Create creates a new automation
@@ -127,6 +135,31 @@ func (s *AutomationService) List(ctx context.Context, workspaceID string, filter
 	}
 
 	return automations, count, nil
+}
+
+// ListNovuWorkflows lists the Novu workflows of the CRM bridge that a novu_message node can
+// send through. Reading the automations is enough: the list only fills a picker. It returns
+// *domain.NovuBridgeUnavailableError when the bridge is not set up or cannot answer.
+func (s *AutomationService) ListNovuWorkflows(ctx context.Context, workspaceID string) ([]domain.NovuWorkflow, error) {
+	ctx, _, userWorkspace, err := s.authService.AuthenticateUserForWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to authenticate: %w", err)
+	}
+
+	if !userWorkspace.HasPermission(domain.PermissionResourceAutomations, domain.PermissionTypeRead) {
+		return nil, domain.NewPermissionError(
+			domain.PermissionResourceAutomations,
+			domain.PermissionTypeRead,
+			"Insufficient permissions: read access to automations required",
+		)
+	}
+
+	workflows, err := s.novuBridge.ListWorkflows(ctx)
+	if err != nil {
+		s.logger.WithField("workspace_id", workspaceID).Warn(fmt.Sprintf("failed to list Novu workflows: %v", err))
+		return nil, err
+	}
+	return workflows, nil
 }
 
 // Update updates an existing automation

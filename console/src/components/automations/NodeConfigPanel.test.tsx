@@ -20,6 +20,10 @@ vi.mock('./config', () => {
     RemoveFromListConfigForm: Stub,
     FilterConfigForm: Stub,
     WebhookConfigForm: Stub,
+    // Shows the props the panel hands it, which only this form takes the workspace id from.
+    NovuMessageConfigForm: ({ workspaceId }: { workspaceId: string }) => (
+      <div data-testid="novu-form" data-workspace-id={workspaceId} />
+    ),
     ListStatusBranchConfigForm: Stub
   }
 })
@@ -40,6 +44,7 @@ const ALL_NODE_TYPES = Object.keys({
   remove_from_list: true,
   ab_test: true,
   webhook: true,
+  novu_message: true,
   list_status_branch: true
 } satisfies Record<NodeType, true>) as NodeType[]
 
@@ -63,6 +68,14 @@ const renderPanel = (selectedNode: Node<AutomationNodeData>) => {
   )
   return { onNodeUpdate, ...view }
 }
+
+describe('NodeConfigPanel novu_message', () => {
+  it('opens the workflow form, with the workspace the workflows are listed for', () => {
+    renderPanel(makeNode('n1', 'novu_message', { workflow_id: 'crm-message' }))
+
+    expect(screen.getByTestId('novu-form')).toHaveAttribute('data-workspace-id', 'ws-1')
+  })
+})
 
 describe('NodeConfigPanel description', () => {
   it('offers a description for every node type', () => {

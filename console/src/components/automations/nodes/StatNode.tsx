@@ -11,7 +11,8 @@ import {
   ListMinus,
   ListChecks,
   FlaskConical,
-  Webhook
+  Webhook,
+  Bell
 } from 'lucide-react'
 import { useLingui } from '@lingui/react/macro'
 import { nodeTypeColors, getNodeDescription } from './constants'
@@ -28,6 +29,7 @@ const nodeIcons: Record<NodeType, React.ReactNode> = {
   remove_from_list: <ListMinus size={16} />,
   ab_test: <FlaskConical size={16} />,
   webhook: <Webhook size={16} />,
+  novu_message: <Bell size={16} />,
   list_status_branch: <ListChecks size={16} />
 }
 
@@ -86,6 +88,7 @@ export const StatNode: React.FC<StatNodeProps> = ({ data }) => {
     remove_from_list: t`Remove from List`,
     ab_test: t`A/B Test`,
     webhook: t`Webhook`,
+    novu_message: t`In-app / push message`,
     list_status_branch: t`List Status`
   }
 
@@ -94,9 +97,9 @@ export const StatNode: React.FC<StatNodeProps> = ({ data }) => {
   // Use 0 values when no stats available
   const nodeStats = stats || { entered: 0, completed: 0, failed: 0, skipped: 0 }
 
-  // Only email and webhook nodes surface a Failed counter. Any node kind can record a failed
+  // Only email, webhook and in-app / push message nodes surface a Failed counter. Any node kind can record a failed
   // execution, so a failure on another kind is counted by the API but not shown here.
-  const showFailedRate = nodeType === 'email' || nodeType === 'webhook'
+  const showFailedRate = nodeType === 'email' || nodeType === 'webhook' || nodeType === 'novu_message'
 
   return (
     <>

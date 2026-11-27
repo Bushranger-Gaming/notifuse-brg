@@ -188,6 +188,7 @@ describe('AutomationFlowViewer', () => {
       remove_from_list: true,
       ab_test: true,
       webhook: true,
+      novu_message: true,
       list_status_branch: true
     } satisfies Record<NodeType, true>)
 

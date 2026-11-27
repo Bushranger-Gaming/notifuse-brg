@@ -290,6 +290,8 @@ export function useAutomationCanvas(): UseAutomationCanvasReturn {
           active_node_id: '',
           non_active_node_id: ''
         }
+      case 'novu_message':
+        return { workflow_id: '' }
       default:
         return {}
     }

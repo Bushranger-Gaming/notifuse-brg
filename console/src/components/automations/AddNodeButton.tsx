@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback } from 'react'
 import { Popover, Tooltip } from 'antd'
-import { Plus, UserPlus, UserMinus, Filter, Globe, ListChecks } from 'lucide-react'
+import { Plus, UserPlus, UserMinus, Filter, Globe, ListChecks, Bell } from 'lucide-react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faHourglass, faEnvelope } from '@fortawesome/free-regular-svg-icons'
 import { faFlask } from '@fortawesome/free-solid-svg-icons'
@@ -17,7 +17,8 @@ export const ADD_NODE_MENU_ITEMS: { key: NodeType; label: string; icon: React.Re
   { key: 'list_status_branch', label: 'List Status', icon: <ListChecks size={14} style={{ color: '#389e0d' }} /> },
   { key: 'add_to_list', label: 'Add to List', icon: <UserPlus size={14} style={{ color: '#13c2c2' }} /> },
   { key: 'remove_from_list', label: 'Remove from List', icon: <UserMinus size={14} style={{ color: '#fa541c' }} /> },
-  { key: 'webhook', label: 'Webhook', icon: <Globe size={14} style={{ color: '#9254de' }} /> }
+  { key: 'webhook', label: 'Webhook', icon: <Globe size={14} style={{ color: '#9254de' }} /> },
+  { key: 'novu_message', label: 'In-app / push message', icon: <Bell size={14} style={{ color: '#fa8c16' }} /> }
 ]
 
 interface AddNodeButtonProps {
@@ -81,6 +82,7 @@ export const AddNodeButton: React.FC<AddNodeButtonProps> = ({
         add_to_list: t`Add to List`,
         remove_from_list: t`Remove from List`,
         webhook: t`Webhook`,
+        novu_message: t`In-app / push message`,
         branch: t`Branch`
       }
       return labels[key] || key

@@ -276,6 +276,7 @@ var AuditExcludedRoutes = map[string]struct{}{
 	"automations.get":                  {},
 	"automations.list":                 {},
 	"automations.nodeExecutions":       {},
+	"automations.novuWorkflows":        {},
 	"blogCategories.get":               {},
 	"blogCategories.list":              {},
 	"blogPosts.get":                    {},

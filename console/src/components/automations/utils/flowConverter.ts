@@ -12,7 +12,8 @@ import type {
   AddToListNodeConfig,
   RemoveFromListNodeConfig,
   ListStatusBranchNodeConfig,
-  WebhookNodeConfig
+  WebhookNodeConfig,
+  NovuMessageNodeConfig
 } from '../../../services/api/automation'
 import type { TreeNode } from '../../../services/api/segment'
 import { HasLeaf } from '../../segment/tree_completeness'
@@ -65,6 +66,7 @@ export function getNodeLabel(type: NodeType): string {
     remove_from_list: 'Remove from List',
     ab_test: 'A/B Test',
     webhook: 'Webhook',
+    novu_message: 'In-app / push message',
     list_status_branch: 'List Status'
   }
   return labels[type] || type
@@ -524,6 +526,20 @@ export function validateFlow(
           nodeId: node.id,
           field: 'list_id',
           message: 'List Status node must have a list selected'
+        })
+      }
+    })
+
+  // Check novu_message nodes have a workflow selected
+  nodes
+    .filter((n) => n.data.nodeType === 'novu_message')
+    .forEach((node) => {
+      const config = node.data.config as Structural<NovuMessageNodeConfig>
+      if (!config.workflow_id) {
+        errors.push({
+          nodeId: node.id,
+          field: 'workflow_id',
+          message: 'In-app / push message node must have a workflow selected'
         })
       }
     })

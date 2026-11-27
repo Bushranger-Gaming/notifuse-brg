@@ -27,7 +27,7 @@ Notifuse is a modern, self-hosted emailing platform that allows you to send news
 ### 🔀 Automations
 
 - **Visual Flow Builder**: Build multi-step journeys on a canvas — each automation is a graph of nodes with a single trigger as its root
-- **Node Types**: `delay`, `email`, `branch`, `filter`, `add_to_list`, `remove_from_list`, `ab_test`, `webhook`, and `list_status_branch`
+- **Node Types**: `delay`, `email`, `branch`, `filter`, `add_to_list`, `remove_from_list`, `ab_test`, `webhook`, `novu_message` and `list_status_branch`
 - **Timed Delays**: Wait minutes, hours or days between steps
 - **Branching & Filters**: Split a journey on contact conditions, or on a contact's status in a given list
 - **A/B Testing In-Flow**: Weighted variants inside an automation, not just on broadcasts

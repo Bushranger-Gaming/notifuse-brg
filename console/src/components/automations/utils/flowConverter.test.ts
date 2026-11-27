@@ -4,6 +4,7 @@ import {
   automationToFlow,
   buildTriggerConfig,
   flowToAutomationNodes,
+  getNodeLabel,
   hydrateTriggerNodeConfig,
   validateFlow,
   type AutomationNodeData
@@ -386,6 +387,35 @@ describe('node descriptions survive the converter', () => {
     )
 
     expect(nodes[0].data.config.description).toBe('Anyone new')
+  })
+})
+
+describe('validateFlow: in-app / push message nodes', () => {
+  const novuNode = (config: Record<string, unknown>): Node<AutomationNodeData> => ({
+    id: 'novu-1',
+    type: 'novu_message',
+    position: { x: 0, y: 0 },
+    data: { nodeType: 'novu_message', label: 'In-app / push message', config }
+  })
+  const workflowErrors = (config: Record<string, unknown>) =>
+    validateFlow([novuNode(config)], []).filter((error) => error.field === 'workflow_id')
+
+  it('asks for a workflow on a node that has none', () => {
+    for (const config of [{}, { workflow_id: '' }, { title: 'Hi' }]) {
+      const errors = workflowErrors(config)
+      expect(errors, JSON.stringify(config)).toHaveLength(1)
+      expect(errors[0].nodeId).toBe('novu-1')
+      expect(errors[0].message).toBe('In-app / push message node must have a workflow selected')
+    }
+  })
+
+  it('accepts a node with a workflow, with or without text', () => {
+    expect(workflowErrors({ workflow_id: 'crm-welcome-inapp' })).toHaveLength(0)
+    expect(workflowErrors({ workflow_id: 'crm-message', title: 'Hi', body: 'There' })).toHaveLength(0)
+  })
+
+  it('labels the node type for the canvas', () => {
+    expect(getNodeLabel('novu_message')).toBe('In-app / push message')
   })
 })
 

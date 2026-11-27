@@ -38,6 +38,7 @@ func NewAutomationExecutor(
 	log logger.Logger,
 	apiEndpoint string,
 	webhookHTTPClient *http.Client,
+	novuBridge *NovuBridge,
 ) *AutomationExecutor {
 	qb := NewQueryBuilder()
 
@@ -52,6 +53,7 @@ func NewAutomationExecutor(
 		domain.NodeTypeABTest:           NewABTestNodeExecutor(),
 		domain.NodeTypeWebhook:          NewWebhookNodeExecutor(log, webhookHTTPClient),
 		domain.NodeTypeListStatusBranch: NewListStatusBranchNodeExecutor(contactListRepo),
+		domain.NodeTypeNovuMessage:      NewNovuMessageNodeExecutor(log, novuBridge),
 	}
 
 	return &AutomationExecutor{

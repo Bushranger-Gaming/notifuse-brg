@@ -48,6 +48,7 @@ const ALL_NODE_TYPES = Object.keys({
   remove_from_list: true,
   ab_test: true,
   webhook: true,
+  novu_message: true,
   list_status_branch: true
 } satisfies Record<NodeType, true>) as NodeType[]
 
@@ -112,6 +113,19 @@ describe('StatNode', () => {
       (el) => el.textContent
     )
     expect(values).toEqual(['0', '0'])
+  })
+})
+
+describe('StatNode for an in-app / push message', () => {
+  it('is titled by the step and counts failures like the other sending steps', () => {
+    const { container } = renderNode(asStatNode(StatNode), {
+      nodeType: 'novu_message',
+      stats: makeStats({ entered: 5, completed: 4, failed: 1 })
+    })
+
+    expect(headerTitle(container)?.textContent).toBe('In-app / push message')
+    const failed = screen.getByText('Failed').closest('.ant-statistic')
+    expect(failed).toHaveTextContent('1')
   })
 })
 

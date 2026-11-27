@@ -174,6 +174,7 @@ type App struct {
 	webhookSubscriptionService       *service.WebhookSubscriptionService
 	webhookDeliveryWorker            *service.WebhookDeliveryWorker
 	automationService                *service.AutomationService
+	novuBridge                       *service.NovuBridge
 	automationScheduler              *service.AutomationScheduler
 	llmService                       *service.LLMService
 	emailQueueWorker                 *queue.EmailQueueWorker
@@ -1202,6 +1203,13 @@ func (a *App) InitServices() error {
 		a.logger,
 		a.config.Webhook.AllowPrivateDeliveryHosts,
 	)
+	// The workflow list of novu_message nodes comes from the CRM bridge, the same one the
+	// automation executor sends through (see below).
+	a.novuBridge = newNovuBridge(a.config, service.NovuBridgeTimeout)
+	a.automationService.SetNovuBridge(a.novuBridge)
+	if !a.novuBridge.Configured() && (a.config.NovuBridge.URL != "" || a.config.NovuBridge.Secret != "") {
+		a.logger.Warn("BRG_NOVU_BRIDGE_URL and BRG_NOVU_BRIDGE_SECRET must both be set: automation novu_message nodes cannot send until they are")
+	}
 
 	// Initialize demo service
 	a.demoService = service.NewDemoService(
@@ -1404,6 +1412,7 @@ func (a *App) InitServices() error {
 		// take the same guard and opt-out as subscriptions. 30s is the node's
 		// timeout from before it had a guard.
 		newOutgoingWebhookClient(a.config.Webhook.AllowPrivateDeliveryHosts, a.config.Tracing.Enabled, 30*time.Second),
+		a.novuBridge,
 	)
 	a.automationScheduler = service.NewAutomationScheduler(
 		automationExecutor,
@@ -1507,6 +1516,29 @@ func newOutgoingWebhookClient(allowPrivateHosts, tracingEnabled bool, timeout ti
 		client = tracing.WrapHTTPClient(client)
 	}
 	return client
+}
+
+// newNovuBridge builds the client of the CRM bridge that novu_message nodes send through, from
+// BRG_NOVU_BRIDGE_URL and BRG_NOVU_BRIDGE_SECRET. It returns a bridge even when they are unset:
+// a node that runs then fails with a clear error, and the workflow list says the bridge is not
+// set up.
+//
+// Its client is not the SSRF-guarded one of webhook nodes. Those post wherever a workspace
+// member typed; this address is set by the operator and is normally on the private network of
+// the deployment (http://bridge:8090), so the guard would refuse it. It does not follow
+// redirects, which keeps the secret with the address the operator named. Tracing wraps it as it
+// wraps the others.
+func newNovuBridge(cfg *config.Config, timeout time.Duration) *service.NovuBridge {
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	if cfg.Tracing.Enabled {
+		client = tracing.WrapHTTPClient(client)
+	}
+	return service.NewNovuBridge(cfg.NovuBridge.URL, cfg.NovuBridge.Secret, client)
 }
 
 // InitHandlers initializes all HTTP handlers and routes
