@@ -44,7 +44,8 @@ type NovuBridge struct {
 func NewNovuBridge(baseURL, secret string, httpClient *http.Client) *NovuBridge {
 	if httpClient == nil {
 		httpClient = &http.Client{
-			Timeout: NovuBridgeTimeout,
+			Timeout:   NovuBridgeTimeout,
+			Transport: NovuBridgeTransport(),
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -55,6 +56,23 @@ func NewNovuBridge(baseURL, secret string, httpClient *http.Client) *NovuBridge 
 		secret:     secret,
 		httpClient: httpClient,
 	}
+}
+
+// NovuBridgeTransport is the bridge client's transport: the default one without any proxy, so a
+// proxy set in the environment (HTTP_PROXY, HTTPS_PROXY) never receives the bridge secret.
+func NovuBridgeTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
+	return t
+}
+
+// redact removes the bridge secret from text the bridge sent back, before that text reaches an
+// error, a log line, a node execution or the browser.
+func (b *NovuBridge) redact(s string) string {
+	if b == nil || b.secret == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, b.secret, "[redacted]")
 }
 
 // Configured reports whether both the address and the secret are set. Safe on a nil bridge.
@@ -119,9 +137,14 @@ func (b *NovuBridge) send(ctx context.Context, workflowID, title, body string, p
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read novu bridge response: %w", err)
+		// The status is what decides a 2xx or a 409; a body cut short only loses the log detail.
+		// Any other status with an unreadable body is an error, retried as usual.
+		if (resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.StatusCode == http.StatusConflict {
+			return &novuBridgeResponse{StatusCode: resp.StatusCode}, nil
+		}
+		return nil, fmt.Errorf("failed to read novu bridge response (status %d): %w", resp.StatusCode, err)
 	}
-	return &novuBridgeResponse{StatusCode: resp.StatusCode, Body: respBody}, nil
+	return &novuBridgeResponse{StatusCode: resp.StatusCode, Body: []byte(b.redact(string(respBody)))}, nil
 }
 
 // ListWorkflows asks the bridge for the active Novu workflows (GET /novu/workflows). Every
@@ -170,6 +193,7 @@ func (b *NovuBridge) ListWorkflows(ctx context.Context) ([]domain.NovuWorkflow, 
 		if !domain.IsValidNovuWorkflowID(w.ID) {
 			continue
 		}
+		w.Name = b.redact(w.Name)
 		if w.Name == "" {
 			w.Name = w.ID
 		}

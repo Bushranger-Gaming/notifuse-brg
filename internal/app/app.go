@@ -1527,10 +1527,12 @@ func newOutgoingWebhookClient(allowPrivateHosts, tracingEnabled bool, timeout ti
 // member typed; this address is set by the operator and is normally on the private network of
 // the deployment (http://bridge:8090), so the guard would refuse it. It does not follow
 // redirects, which keeps the secret with the address the operator named. Tracing wraps it as it
-// wraps the others.
+// wraps the others. It never uses a proxy from the environment (HTTP_PROXY and the like), so the
+// secret only ever goes to the bridge itself.
 func newNovuBridge(cfg *config.Config, timeout time.Duration) *service.NovuBridge {
 	client := &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: service.NovuBridgeTransport(),
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

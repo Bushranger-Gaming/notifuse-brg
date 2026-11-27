@@ -447,3 +447,57 @@ func TestNewAutomationExecutor_RegistersNovuMessage(t *testing.T) {
 	require.True(t, ok, "novu_message has no executor")
 	assert.Same(t, bridge, registered.bridge)
 }
+
+// The bridge secret never travels on in what the bridge sends back: not in a retry error, not in
+// the stored node output, not in the workflow names shown to the browser.
+func TestNovuMessageNodeExecutor_Execute_SecretEchoedByBridgeIsRedacted(t *testing.T) {
+	echo := `{"detail":"bad auth header Bearer ` + testNovuSecret + `"}`
+
+	server, _, _ := novuBridgeServer(t, http.StatusInternalServerError, echo)
+	_, err := newNovuExecutor(t, server.URL).Execute(context.Background(), novuNodeParams(map[string]interface{}{"workflow_id": "crm-message"}))
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), testNovuSecret)
+	assert.Contains(t, err.Error(), "[redacted]")
+
+	for _, status := range []int{http.StatusOK, http.StatusConflict} {
+		server, _, _ := novuBridgeServer(t, status, echo)
+		result, err := newNovuExecutor(t, server.URL).Execute(context.Background(), novuNodeParams(map[string]interface{}{"workflow_id": "crm-message"}))
+		require.NoError(t, err)
+		out, _ := json.Marshal(result.Output)
+		assert.NotContains(t, string(out), testNovuSecret, "status %d", status)
+	}
+
+	list := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"workflows":[{"id":"crm-message","name":"leak ` + testNovuSecret + `","uses_text":true}]}`))
+	}))
+	defer list.Close()
+	flows, err := NewNovuBridge(list.URL, testNovuSecret, nil).ListWorkflows(context.Background())
+	require.NoError(t, err)
+	require.Len(t, flows, 1)
+	assert.NotContains(t, flows[0].Name, testNovuSecret)
+}
+
+// A 409 whose body is cut short is still the consent decision: the contact moves on, no retry.
+func TestNovuMessageNodeExecutor_Execute_NotOptedInWithTruncatedBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "500")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"detail":"player is`))
+	}))
+	defer server.Close()
+
+	result, err := newNovuExecutor(t, server.URL).Execute(context.Background(), novuNodeParams(map[string]interface{}{"workflow_id": "crm-message"}))
+
+	require.NoError(t, err)
+	assert.Equal(t, "not_opted_in", result.Output["outcome"])
+	require.NotNil(t, result.NextNodeID)
+}
+
+// A proxy from the environment never sees the bridge secret.
+func TestNovuBridgeTransport_IgnoresEnvironmentProxy(t *testing.T) {
+	assert.Nil(t, NovuBridgeTransport().Proxy)
+	bridge := NewNovuBridge("http://bridge:8090", testNovuSecret, nil)
+	tr, ok := bridge.httpClient.Transport.(*http.Transport)
+	require.True(t, ok, "the default client uses NovuBridgeTransport")
+	assert.Nil(t, tr.Proxy)
+}
