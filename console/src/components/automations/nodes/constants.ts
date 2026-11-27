@@ -11,6 +11,7 @@ export const nodeTypeColors: Record<NodeType, string> = {
   remove_from_list: '#fa541c', // orange
   ab_test: '#2f54eb', // geekblue
   webhook: '#9254de', // violet
+  novu_message: '#fa8c16', // orange (in-app and push notification)
   list_status_branch: '#389e0d' // green-7 (for list-related branching)
 }
 

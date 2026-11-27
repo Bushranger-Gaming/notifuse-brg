@@ -638,10 +638,10 @@ msgstr "値が必要です..."
 msgid "A winner has been selected. Emails are being sent to the remaining recipients."
 msgstr "勝者が選択されました。残りの受信者にメールを送信しています。"
 
-#: src/components/automations/AddNodeButton.tsx:79
+#: src/components/automations/AddNodeButton.tsx:80
 #: src/components/automations/nodes/ABTestNode.tsx:47
-#: src/components/automations/nodes/StatNode.tsx:87
-#: src/components/automations/nodes/StatNode.tsx:340
+#: src/components/automations/nodes/StatNode.tsx:89
+#: src/components/automations/nodes/StatNode.tsx:343
 #: src/pages/BroadcastsPage.tsx:1283
 msgid "A/B Test"
 msgstr "A/Bテスト"
@@ -693,7 +693,7 @@ msgstr "オートメーションを有効化しますか?"
 
 #: src/components/automations/config/ListStatusBranchConfigForm.tsx:48
 #: src/components/automations/nodes/ListStatusBranchNode.tsx:60
-#: src/components/automations/nodes/StatNode.tsx:274
+#: src/components/automations/nodes/StatNode.tsx:277
 #: src/components/contacts/ContactDetailsDrawer.tsx:587
 #: src/components/contacts/SegmentsFilter.tsx:53
 #: src/components/lists/ListStats.tsx:66
@@ -878,7 +878,7 @@ msgstr "キーワードを追加..."
 msgid "Add Label"
 msgstr "ラベルを追加"
 
-#: src/components/automations/AddNodeButton.tsx:130
+#: src/components/automations/AddNodeButton.tsx:132
 msgid "Add node"
 msgstr "ノードを追加"
 
@@ -926,9 +926,9 @@ msgstr "タグを追加..."
 msgid "Add to list"
 msgstr "リストに追加"
 
-#: src/components/automations/AddNodeButton.tsx:81
+#: src/components/automations/AddNodeButton.tsx:82
 #: src/components/automations/nodes/AddToListNode.tsx:41
-#: src/components/automations/nodes/StatNode.tsx:85
+#: src/components/automations/nodes/StatNode.tsx:87
 msgid "Add to List"
 msgstr "リストに追加"
 
@@ -1967,6 +1967,10 @@ msgstr "ブログタイトル"
 msgid "Blog write publishes JavaScript on your own domain. A theme carries its own `scripts.js`, and /api/blogThemes.publish makes it live for every visitor of the blog's custom domain — so this switch is the right to run any script on your site, not just to edit content. It also reaches workspace configuration: /api/workspaces.setBlogSettings answers to Blog write rather than Workspace write, so whoever you hand the blog to can also switch the blog feature itself on or off."
 msgstr "ブログの書き込みは、自社ドメイン上でJavaScriptを公開します。テーマは独自の `scripts.js` を持ち、/api/blogThemes.publish はそれをブログのカスタムドメインのすべての訪問者に対して有効にします — つまりこのスイッチは、コンテンツを編集する権利にとどまらず、サイト上で任意のスクリプトを実行する権利です。ワークスペース設定にも及びます: /api/workspaces.setBlogSettings はワークスペースの書き込みではなくブログの書き込みに従うため、ブログを任せた相手はブログ機能そのものの有効・無効も切り替えられます。"
 
+#: src/components/automations/config/NovuMessageConfigForm.tsx:121
+msgid "Body"
+msgstr ""
+
 #: src/components/email_builder/blocks/MjBodyBlock.tsx:43
 msgid "Body Attributes"
 msgstr "Body属性"
@@ -2104,8 +2108,8 @@ msgstr "バウンスタイプ"
 msgid "Bounced"
 msgstr "バウンス済み"
 
-#: src/components/automations/AddNodeButton.tsx:84
-#: src/components/automations/nodes/StatNode.tsx:83
+#: src/components/automations/AddNodeButton.tsx:86
+#: src/components/automations/nodes/StatNode.tsx:85
 msgid "Branch"
 msgstr "分岐"
 
@@ -2986,10 +2990,10 @@ msgid "completed"
 msgstr "完了"
 
 #: src/components/automations/AutomationCard.tsx:267
-#: src/components/automations/nodes/StatNode.tsx:132
-#: src/components/automations/nodes/StatNode.tsx:195
-#: src/components/automations/nodes/StatNode.tsx:264
-#: src/components/automations/nodes/StatNode.tsx:353
+#: src/components/automations/nodes/StatNode.tsx:135
+#: src/components/automations/nodes/StatNode.tsx:198
+#: src/components/automations/nodes/StatNode.tsx:267
+#: src/components/automations/nodes/StatNode.tsx:356
 #: src/pages/BroadcastsPage.tsx:518
 #: src/pages/BroadcastsPage.tsx:1221
 msgid "Completed"
@@ -3023,7 +3027,7 @@ msgstr "条件"
 #~ msgid "Conditions (all must match; none = always match)"
 #~ msgstr ""
 
-#: src/components/automations/NodeConfigPanel.tsx:165
+#: src/components/automations/NodeConfigPanel.tsx:176
 msgid "Configuration for {nodeType} is not available in Phase 2"
 msgstr "{nodeType}の設定はフェーズ2では利用できません"
 
@@ -3034,7 +3038,7 @@ msgstr "コンフィギュレーションセット"
 
 #: src/components/analytics/AnalyticsDashboard.tsx:166
 #: src/components/analytics/AnalyticsDashboard.tsx:190
-#: src/components/automations/NodeConfigPanel.tsx:176
+#: src/components/automations/NodeConfigPanel.tsx:187
 #: src/components/automations/nodes/ABTestNode.tsx:60
 #: src/components/automations/nodes/AddToListNode.tsx:54
 #: src/components/automations/nodes/DelayNode.tsx:20
@@ -4112,9 +4116,9 @@ msgstr "デフォルトはSMTPホスト"
 msgid "Define UTM parameters for links in your email for better campaign tracking."
 msgstr "キャンペーントラッキングのためにメール内リンクのUTMパラメータを設定します。"
 
-#: src/components/automations/AddNodeButton.tsx:76
+#: src/components/automations/AddNodeButton.tsx:77
 #: src/components/automations/nodes/DelayNode.tsx:45
-#: src/components/automations/nodes/StatNode.tsx:81
+#: src/components/automations/nodes/StatNode.tsx:83
 msgid "Delay"
 msgstr "遅延"
 
@@ -4435,7 +4439,7 @@ msgstr "デプロイメント"
 msgid "Describe this image..."
 msgstr "この画像を説明..."
 
-#: src/components/automations/NodeConfigPanel.tsx:195
+#: src/components/automations/NodeConfigPanel.tsx:206
 #: src/components/blog/CategoryDrawer.tsx:155
 #: src/components/lists/ListDrawer.tsx:206
 #: src/components/transactional/UpsertTransactionalNotificationDrawer.tsx:330
@@ -4792,7 +4796,7 @@ msgstr "例: purchase"
 msgid "e.g., Raleway, Open Sans"
 msgstr "例: Raleway、Open Sans"
 
-#: src/components/automations/NodeConfigPanel.tsx:209
+#: src/components/automations/NodeConfigPanel.tsx:220
 msgid "e.g., Welcome — day 1"
 msgstr "例: ウェルカム — 1日目"
 
@@ -5023,10 +5027,10 @@ msgid "email"
 msgstr "メール"
 
 #: src/components/analytics/NewContactsTable.tsx:67
-#: src/components/automations/AddNodeButton.tsx:77
+#: src/components/automations/AddNodeButton.tsx:78
 #: src/components/automations/config/TriggerConfigForm.tsx:97
 #: src/components/automations/nodes/EmailNode.tsx:49
-#: src/components/automations/nodes/StatNode.tsx:82
+#: src/components/automations/nodes/StatNode.tsx:84
 #: src/components/contacts/BulkUpdateDrawer.tsx:665
 #: src/components/contacts/ContactsCsvUploadDrawer.tsx:89
 #: src/components/contacts/ContactsCsvUploadDrawer.tsx:930
@@ -5803,9 +5807,9 @@ msgstr "失敗"
 #: src/components/analytics/EmailMetricsChart.tsx:286
 #: src/components/analytics/EmailMetricsChart.tsx:533
 #: src/components/automations/AutomationCard.tsx:281
-#: src/components/automations/nodes/StatNode.tsx:138
-#: src/components/automations/nodes/StatNode.tsx:200
-#: src/components/automations/nodes/StatNode.tsx:359
+#: src/components/automations/nodes/StatNode.tsx:141
+#: src/components/automations/nodes/StatNode.tsx:203
+#: src/components/automations/nodes/StatNode.tsx:362
 #: src/components/broadcasts/BroadcastStats.tsx:297
 #: src/components/contacts/BulkActionProgressModal.tsx:106
 #: src/components/contacts/BulkActionProgressModal.tsx:146
@@ -6439,10 +6443,10 @@ msgstr "ファイルストレージ設定"
 msgid "Fill in the fields of a hypothetical visit; empty fields count as empty values."
 msgstr "仮想的な訪問のフィールドを入力してください。空欄は空の値として扱われます。"
 
-#: src/components/automations/AddNodeButton.tsx:78
+#: src/components/automations/AddNodeButton.tsx:79
 #: src/components/automations/nodes/FilterNode.tsx:48
-#: src/components/automations/nodes/StatNode.tsx:84
-#: src/components/automations/nodes/StatNode.tsx:182
+#: src/components/automations/nodes/StatNode.tsx:86
+#: src/components/automations/nodes/StatNode.tsx:185
 msgid "Filter"
 msgstr "フィルター"
 
@@ -7351,6 +7355,12 @@ msgstr "過去"
 msgid "in the payload."
 msgstr "ペイロード内で。"
 
+#: src/components/automations/AddNodeButton.tsx:85
+#: src/components/automations/nodes/NovuMessageNode.tsx:45
+#: src/components/automations/nodes/StatNode.tsx:91
+msgid "In-app / push message"
+msgstr ""
+
 #: src/components/settings/Integrations.tsx:236
 msgid "inbound replies"
 msgstr "受信返信"
@@ -7377,10 +7387,10 @@ msgstr "インデックスしてリンクをフォロー"
 msgid "Index, but don't follow links"
 msgstr "インデックスするがリンクはフォローしない"
 
-#: src/components/automations/nodes/StatNode.tsx:127
-#: src/components/automations/nodes/StatNode.tsx:190
-#: src/components/automations/nodes/StatNode.tsx:259
-#: src/components/automations/nodes/StatNode.tsx:348
+#: src/components/automations/nodes/StatNode.tsx:130
+#: src/components/automations/nodes/StatNode.tsx:193
+#: src/components/automations/nodes/StatNode.tsx:262
+#: src/components/automations/nodes/StatNode.tsx:351
 msgid "Inflight"
 msgstr "処理中"
 
@@ -8057,10 +8067,10 @@ msgstr "セグメントを、その完全な定義ツリーとともに一覧表
 msgid "List sent messages with their recipient address, delivery and engagement timestamps, and the data each was rendered with"
 msgstr "送信済みメッセージを、受信者アドレス、配信・エンゲージメントのタイムスタンプ、各メッセージのレンダリングに使われたデータとともに一覧表示する"
 
-#: src/components/automations/AddNodeButton.tsx:80
+#: src/components/automations/AddNodeButton.tsx:81
 #: src/components/automations/nodes/ListStatusBranchNode.tsx:38
-#: src/components/automations/nodes/StatNode.tsx:89
-#: src/components/automations/nodes/StatNode.tsx:251
+#: src/components/automations/nodes/StatNode.tsx:92
+#: src/components/automations/nodes/StatNode.tsx:254
 #: src/components/contacts/ExportContactsModal.tsx:85
 #: src/pages/ContactsPage.tsx:395
 msgid "List Status"
@@ -8201,7 +8211,7 @@ msgstr "メッセージ履歴を読み込み中..."
 msgid "Loading setup..."
 msgstr "セットアップを読み込み中..."
 
-#: src/components/automations/AutomationFlowViewer.tsx:237
+#: src/components/automations/AutomationFlowViewer.tsx:238
 msgid "Loading stats..."
 msgstr "統計を読み込み中..."
 
@@ -8220,6 +8230,10 @@ msgstr "Webhookイベントを読み込み中..."
 #: src/components/settings/Integrations.tsx:252
 msgid "Loading webhook status..."
 msgstr "Webhookステータスを読み込み中..."
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:100
+msgid "Loading workflows..."
+msgstr ""
 
 #: src/components/blog_editor/NotifuseEditor.tsx:480
 #: src/components/messages/MessageHistoryTab.tsx:597
@@ -8553,7 +8567,7 @@ msgstr "分"
 msgid "Minimal"
 msgstr "最小限"
 
-#: src/components/automations/AutomationFlowEditor.tsx:436
+#: src/components/automations/AutomationFlowEditor.tsx:437
 msgid "Minimap"
 msgstr "ミニマップ"
 
@@ -8897,6 +8911,10 @@ msgstr "プレビューする{0}コンテンツがありません"
 msgid "No Access"
 msgstr "アクセス権なし"
 
+#: src/components/automations/config/NovuMessageConfigForm.tsx:100
+msgid "No active workflows"
+msgstr ""
+
 #: src/components/web_analytics/annotations/AnnotationTable.tsx:106
 #: src/components/web_analytics/annotations/AnnotationTable.tsx:171
 msgid "No annotations yet"
@@ -9115,7 +9133,7 @@ msgstr "エクスポートするMJMLコンテンツがありません"
 msgid "No name"
 msgstr "名前なし"
 
-#: src/components/automations/AutomationFlowViewer.tsx:245
+#: src/components/automations/AutomationFlowViewer.tsx:246
 msgid "No nodes in this automation"
 msgstr "このオートメーションにノードがありません"
 
@@ -9283,7 +9301,7 @@ msgstr "ノード"
 
 #: src/components/automations/config/ListStatusBranchConfigForm.tsx:51
 #: src/components/automations/nodes/ListStatusBranchNode.tsx:61
-#: src/components/automations/nodes/StatNode.tsx:275
+#: src/components/automations/nodes/StatNode.tsx:278
 msgid "Non-Active"
 msgstr "非アクティブ"
 
@@ -9353,7 +9371,7 @@ msgstr "いずれにも一致しない"
 
 #: src/components/automations/config/ListStatusBranchConfigForm.tsx:45
 #: src/components/automations/nodes/ListStatusBranchNode.tsx:59
-#: src/components/automations/nodes/StatNode.tsx:273
+#: src/components/automations/nodes/StatNode.tsx:276
 msgid "Not in List"
 msgstr "リストに含まれない"
 
@@ -11160,9 +11178,9 @@ msgstr "フィールドを削除"
 msgid "Remove from list"
 msgstr "リストから削除"
 
-#: src/components/automations/AddNodeButton.tsx:82
+#: src/components/automations/AddNodeButton.tsx:83
 #: src/components/automations/nodes/RemoveFromListNode.tsx:39
-#: src/components/automations/nodes/StatNode.tsx:86
+#: src/components/automations/nodes/StatNode.tsx:88
 msgid "Remove from List"
 msgstr "リストから削除"
 
@@ -11211,7 +11229,7 @@ msgstr "プレビューをレンダリング中..."
 msgid "Renew licence"
 msgstr ""
 
-#: src/components/automations/AutomationFlowEditor.tsx:424
+#: src/components/automations/AutomationFlowEditor.tsx:425
 msgid "Reorganize layout"
 msgstr "レイアウトを再編成"
 
@@ -11916,6 +11934,7 @@ msgid "Segments"
 msgstr "セグメント"
 
 #: src/components/automations/nodes/EmailNode.tsx:66
+#: src/components/automations/nodes/NovuMessageNode.tsx:57
 #: src/components/file_manager/fileManager.tsx:976
 #: src/components/settings/BlogSettings.tsx:360
 #: src/components/settings/BlogSettings.tsx:376
@@ -11963,7 +11982,7 @@ msgstr "フィールドを選択"
 msgid "Select a list"
 msgstr "リストを選択"
 
-#: src/components/automations/AddNodeButton.tsx:118
+#: src/components/automations/AddNodeButton.tsx:120
 #: src/components/automations/NodePalette.tsx:40
 msgid "Select a list to enable email nodes"
 msgstr "メールノードを有効にするにはリストを選択"
@@ -11998,6 +12017,10 @@ msgstr "テンプレートを選択"
 #: src/components/segment/button_upsert.tsx:578
 msgid "Select a time zone"
 msgstr "タイムゾーンを選択"
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:89
+msgid "Select a workflow..."
+msgstr ""
 
 #: src/components/settings/WebhooksSettings.tsx:300
 msgid "Select all"
@@ -12685,6 +12708,11 @@ msgstr "もっと表示（残り{0}件）"
 #: src/components/broadcasts/BroadcastLinkStats.tsx:200
 msgid "Showing the top 200 links by unique clicks."
 msgstr "ユニーククリック数の上位200件のリンクを表示しています。"
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:109
+#: src/components/automations/config/NovuMessageConfigForm.tsx:124
+#~ msgid "Shown by workflows that use the flow's text (e.g. CRM · Message)"
+#~ msgstr ""
 
 #: src/pages/SignInPage.tsx:244
 msgid "Sign In"
@@ -13802,6 +13830,10 @@ msgstr "マーケティングメールプロバイダーにはテストの送信
 #~ msgid "The name {prefix} is already taken on this Notifuse installation. Please pick another one."
 #~ msgstr "名前「{prefix}」はこのNotifuseインストールですでに使用されています。別の名前を選んでください。"
 
+#: src/components/automations/config/NovuMessageConfigForm.tsx:63
+msgid "The Novu workflow that sends the in-app message and web push"
+msgstr ""
+
 #: src/services/api/permissions.ts:694
 msgid "The outbound message log: every email the workspace sent, its delivery status, and the engagement counted against it."
 msgstr "送信メッセージのログ: ワークスペースが送信したすべてのメール、その配信ステータス、およびそれに対して計上されたエンゲージメント。"
@@ -13868,7 +13900,7 @@ msgid "The user_metadata field in Supabase will be saved to this custom JSON fie
 msgstr "Supabaseのuser_metadataフィールドはこのカスタムJSONフィールドに保存されます"
 
 #: src/components/automations/config/WebhookConfigForm.tsx:36
-#: src/components/automations/utils/flowConverter.ts:543
+#: src/components/automations/utils/flowConverter.ts:559
 msgid "The webhook URL points at a private or internal address ({host}), which Notifuse does not connect to. Use a public URL, or set WEBHOOK_DELIVERY_ALLOW_PRIVATE_HOSTS=true on a self-hosted install that delivers to its own network."
 msgstr "Webhook URLがプライベートまたは内部アドレス（{host}）を指しています。Notifuseはこのアドレスに接続しません。公開URLを使用するか、自社ネットワークに配信するセルフホスト環境ではWEBHOOK_DELIVERY_ALLOW_PRIVATE_HOSTS=trueを設定してください。"
 
@@ -13879,6 +13911,10 @@ msgstr "Webhookはイベントの受信を停止します。"
 #: src/components/automations/config/ConditionsField.tsx:117
 msgid "The whole condition tree will be deleted."
 msgstr "条件ツリー全体が削除されます。"
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:71
+msgid "The workflow list is unavailable"
+msgstr ""
 
 #: src/components/broadcasts/SendVariationTestModal.tsx:112
 msgid "The workspace has no marketing email provider, so there is nothing to send the test through"
@@ -14241,6 +14277,10 @@ msgstr "指定されたアドレスに実際のテストメールが送信され
 msgid "This will set the value to NULL. Are you sure?"
 msgstr "値がNULLに設定されます。よろしいですか？"
 
+#: src/components/automations/config/NovuMessageConfigForm.tsx:62
+msgid "This workflow is not among the bridge's active workflows"
+msgstr ""
+
 #: src/components/logs/AuditLogsTab.tsx:64
 msgid "This workspace"
 msgstr "このワークスペース"
@@ -14359,6 +14399,7 @@ msgstr "効果的なプレビューテキストのヒント:"
 msgid "Tips for fixing these errors:"
 msgstr "これらのエラーを修正するヒント:"
 
+#: src/components/automations/config/NovuMessageConfigForm.tsx:106
 #: src/components/blog/PostDrawer.tsx:800
 #: src/components/blog/PostsTable.tsx:193
 #: src/components/email_builder/blocks/MjSocialElementBlock.tsx:408
@@ -14367,6 +14408,10 @@ msgstr "これらのエラーを修正するヒント:"
 #: src/components/web_analytics/annotations/AnnotationFormModal.tsx:182
 msgid "Title"
 msgstr "タイトル"
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:109
+msgid "Title and body are shown by workflows that use the flow's text, such as CRM message"
+msgstr ""
 
 #: src/components/web_analytics/annotations/AnnotationFormModal.tsx:184
 msgid "Title is required"
@@ -14643,9 +14688,9 @@ msgstr "透明"
 msgid "Trial"
 msgstr "トライアル"
 
-#: src/components/automations/AddNodeButton.tsx:75
+#: src/components/automations/AddNodeButton.tsx:76
 #: src/components/automations/AutomationCard.tsx:294
-#: src/components/automations/nodes/StatNode.tsx:80
+#: src/components/automations/nodes/StatNode.tsx:82
 #: src/components/automations/nodes/TriggerNode.tsx:60
 msgid "Trigger"
 msgstr "トリガー"
@@ -15427,8 +15472,8 @@ msgstr "Webアナリティクス設定を正常に更新しました"
 msgid "Web session"
 msgstr "Webセッション"
 
-#: src/components/automations/AddNodeButton.tsx:83
-#: src/components/automations/nodes/StatNode.tsx:88
+#: src/components/automations/AddNodeButton.tsx:84
+#: src/components/automations/nodes/StatNode.tsx:90
 #: src/components/automations/nodes/WebhookNode.tsx:47
 #: src/components/timeline/ContactTimeline.tsx:731
 msgid "Webhook"
@@ -15700,6 +15745,14 @@ msgstr "ステータス付き"
 #: src/components/web_analytics/explore/ExploreTemplates.tsx:129
 msgid "With:"
 msgstr "含む内容:"
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:58
+msgid "Workflow"
+msgstr ""
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:80
+msgid "Workflow id"
+msgstr ""
 
 #: src/components/settings/audit_logs/AuditLogDetailsDrawer.tsx:109
 #: src/components/settings/audit_logs/AuditLogTable.tsx:248

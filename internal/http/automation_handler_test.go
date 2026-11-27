@@ -929,3 +929,92 @@ func TestAutomationHandler_UpdateFailedOnceStored(t *testing.T) {
 		})
 	}
 }
+
+func TestAutomationHandler_NovuWorkflows(t *testing.T) {
+	const path = "/api/automations.novuWorkflows?workspace_id=workspace-123"
+
+	get := func(t *testing.T, mux *http.ServeMux, secretKey []byte, method, url string, authorized bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, url, nil)
+		if authorized {
+			req.Header.Set("Authorization", "Bearer "+createTestToken(t, secretKey, "test-user"))
+		}
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		return w
+	}
+
+	t.Run("the workflows of the bridge", func(t *testing.T) {
+		_, automationSvc, mux, secretKey := setupAutomationTest(t)
+		automationSvc.EXPECT().ListNovuWorkflows(gomock.Any(), "workspace-123").Return([]domain.NovuWorkflow{
+			{ID: "crm-message", Name: "CRM · Message", UsesText: true},
+			{ID: "crm-welcome-inapp", Name: "CRM · Welcome", UsesText: false},
+		}, nil)
+
+		w := get(t, mux, secretKey, http.MethodGet, path, true)
+
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.JSONEq(t, `{"workflows":[
+			{"id":"crm-message","name":"CRM · Message","uses_text":true},
+			{"id":"crm-welcome-inapp","name":"CRM · Welcome","uses_text":false}
+		]}`, w.Body.String())
+	})
+
+	t.Run("no workflows is an empty list, not null", func(t *testing.T) {
+		_, automationSvc, mux, secretKey := setupAutomationTest(t)
+		automationSvc.EXPECT().ListNovuWorkflows(gomock.Any(), "workspace-123").Return(nil, nil)
+
+		w := get(t, mux, secretKey, http.MethodGet, path, true)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.JSONEq(t, `{"workflows":[]}`, w.Body.String())
+	})
+
+	t.Run("a bridge that cannot answer is a 503 that says why", func(t *testing.T) {
+		_, automationSvc, mux, secretKey := setupAutomationTest(t)
+		for _, message := range []string{
+			"The Novu bridge is not set up on this server: BRG_NOVU_BRIDGE_URL and BRG_NOVU_BRIDGE_SECRET are required",
+			"Could not reach the Novu bridge",
+		} {
+			automationSvc.EXPECT().ListNovuWorkflows(gomock.Any(), "workspace-123").
+				Return(nil, fmt.Errorf("list: %w", &domain.NovuBridgeUnavailableError{Message: message}))
+
+			w := get(t, mux, secretKey, http.MethodGet, path, true)
+
+			assert.Equal(t, http.StatusServiceUnavailable, w.Code, message)
+			assert.JSONEq(t, fmt.Sprintf(`{"error":%q}`, message), w.Body.String())
+		}
+	})
+
+	t.Run("service errors: 401, 403, 500", func(t *testing.T) {
+		_, automationSvc, mux, secretKey := setupAutomationTest(t)
+		cases := []struct {
+			err  error
+			want int
+		}{
+			{fmt.Errorf("failed to authenticate user: %w", domain.ErrAPIKeyRevoked), http.StatusUnauthorized},
+			{domain.NewPermissionError(domain.PermissionResourceAutomations, domain.PermissionTypeRead, "no"), http.StatusForbidden},
+			{errors.New("db down"), http.StatusInternalServerError},
+		}
+		for _, c := range cases {
+			automationSvc.EXPECT().ListNovuWorkflows(gomock.Any(), "workspace-123").Return(nil, c.err)
+			w := get(t, mux, secretKey, http.MethodGet, path, true)
+			assert.Equal(t, c.want, w.Code, c.err.Error())
+			assert.NotContains(t, w.Body.String(), "db down", "the internal error stays in the log")
+		}
+	})
+
+	t.Run("a non-GET is a 405", func(t *testing.T) {
+		_, _, mux, secretKey := setupAutomationTest(t)
+		assert.Equal(t, http.StatusMethodNotAllowed, get(t, mux, secretKey, http.MethodPost, path, true).Code)
+	})
+
+	t.Run("a request without workspace_id is a 400", func(t *testing.T) {
+		_, _, mux, secretKey := setupAutomationTest(t)
+		assert.Equal(t, http.StatusBadRequest, get(t, mux, secretKey, http.MethodGet, "/api/automations.novuWorkflows", true).Code)
+	})
+
+	t.Run("it needs a signed-in user", func(t *testing.T) {
+		_, _, mux, secretKey := setupAutomationTest(t)
+		assert.Equal(t, http.StatusUnauthorized, get(t, mux, secretKey, http.MethodGet, path, false).Code)
+	})
+}

@@ -42,6 +42,7 @@ const nodeTypes: NodeTypes = {
   remove_from_list: StatNode,
   ab_test: ABTestStatNode,
   webhook: StatNode,
+  novu_message: StatNode,
   list_status_branch: ListStatusStatNode
 }
 

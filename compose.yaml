@@ -57,6 +57,10 @@ services:
       # - SMTP_BRIDGE_TLS=${SMTP_BRIDGE_TLS}  # off | starttls | implicit (default: starttls when certs present)
       # - SMTP_BRIDGE_TLS_CERT_BASE64=${SMTP_BRIDGE_TLS_CERT_BASE64}
       # - SMTP_BRIDGE_TLS_KEY_BASE64=${SMTP_BRIDGE_TLS_KEY_BASE64}
+
+      # CRM bridge for automation "In-app / push message" steps (Optional, both needed - see env.example)
+      # - BRG_NOVU_BRIDGE_URL=${BRG_NOVU_BRIDGE_URL}
+      # - BRG_NOVU_BRIDGE_SECRET=${BRG_NOVU_BRIDGE_SECRET}
     depends_on:
       - postgres
     volumes:

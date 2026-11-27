@@ -638,10 +638,10 @@ msgstr "Une valeur est requise..."
 msgid "A winner has been selected. Emails are being sent to the remaining recipients."
 msgstr "Un gagnant a été sélectionné. Les emails sont en cours d'envoi aux destinataires restants."
 
-#: src/components/automations/AddNodeButton.tsx:79
+#: src/components/automations/AddNodeButton.tsx:80
 #: src/components/automations/nodes/ABTestNode.tsx:47
-#: src/components/automations/nodes/StatNode.tsx:87
-#: src/components/automations/nodes/StatNode.tsx:340
+#: src/components/automations/nodes/StatNode.tsx:89
+#: src/components/automations/nodes/StatNode.tsx:343
 #: src/pages/BroadcastsPage.tsx:1283
 msgid "A/B Test"
 msgstr "Test A/B"
@@ -693,7 +693,7 @@ msgstr "Activer l automation ?"
 
 #: src/components/automations/config/ListStatusBranchConfigForm.tsx:48
 #: src/components/automations/nodes/ListStatusBranchNode.tsx:60
-#: src/components/automations/nodes/StatNode.tsx:274
+#: src/components/automations/nodes/StatNode.tsx:277
 #: src/components/contacts/ContactDetailsDrawer.tsx:587
 #: src/components/contacts/SegmentsFilter.tsx:53
 #: src/components/lists/ListStats.tsx:66
@@ -878,7 +878,7 @@ msgstr "Ajouter des mots-clés..."
 msgid "Add Label"
 msgstr "Ajouter une étiquette"
 
-#: src/components/automations/AddNodeButton.tsx:130
+#: src/components/automations/AddNodeButton.tsx:132
 msgid "Add node"
 msgstr "Ajouter un nœud"
 
@@ -926,9 +926,9 @@ msgstr "Ajouter des tags..."
 msgid "Add to list"
 msgstr "Ajouter à la liste"
 
-#: src/components/automations/AddNodeButton.tsx:81
+#: src/components/automations/AddNodeButton.tsx:82
 #: src/components/automations/nodes/AddToListNode.tsx:41
-#: src/components/automations/nodes/StatNode.tsx:85
+#: src/components/automations/nodes/StatNode.tsx:87
 msgid "Add to List"
 msgstr "Ajouter à la liste"
 
@@ -1967,6 +1967,10 @@ msgstr "Titre du blog"
 msgid "Blog write publishes JavaScript on your own domain. A theme carries its own `scripts.js`, and /api/blogThemes.publish makes it live for every visitor of the blog's custom domain — so this switch is the right to run any script on your site, not just to edit content. It also reaches workspace configuration: /api/workspaces.setBlogSettings answers to Blog write rather than Workspace write, so whoever you hand the blog to can also switch the blog feature itself on or off."
 msgstr "L'écriture Blog publie du JavaScript sur votre propre domaine. Un thème embarque son propre `scripts.js`, et /api/blogThemes.publish le met en ligne pour chaque visiteur du domaine personnalisé du blog — cet interrupteur est donc le droit d'exécuter n'importe quel script sur votre site, et pas seulement de modifier du contenu. Il atteint aussi la configuration de l'espace de travail : /api/workspaces.setBlogSettings dépend de l'écriture Blog et non de l'écriture Espace de travail, si bien que la personne à qui vous confiez le blog peut aussi activer ou désactiver la fonctionnalité blog elle-même."
 
+#: src/components/automations/config/NovuMessageConfigForm.tsx:121
+msgid "Body"
+msgstr ""
+
 #: src/components/email_builder/blocks/MjBodyBlock.tsx:43
 msgid "Body Attributes"
 msgstr "Attributs du corps"
@@ -2104,8 +2108,8 @@ msgstr "Type de rebond"
 msgid "Bounced"
 msgstr "Rejeté"
 
-#: src/components/automations/AddNodeButton.tsx:84
-#: src/components/automations/nodes/StatNode.tsx:83
+#: src/components/automations/AddNodeButton.tsx:86
+#: src/components/automations/nodes/StatNode.tsx:85
 msgid "Branch"
 msgstr "Branche"
 
@@ -2986,10 +2990,10 @@ msgid "completed"
 msgstr "terminé"
 
 #: src/components/automations/AutomationCard.tsx:267
-#: src/components/automations/nodes/StatNode.tsx:132
-#: src/components/automations/nodes/StatNode.tsx:195
-#: src/components/automations/nodes/StatNode.tsx:264
-#: src/components/automations/nodes/StatNode.tsx:353
+#: src/components/automations/nodes/StatNode.tsx:135
+#: src/components/automations/nodes/StatNode.tsx:198
+#: src/components/automations/nodes/StatNode.tsx:267
+#: src/components/automations/nodes/StatNode.tsx:356
 #: src/pages/BroadcastsPage.tsx:518
 #: src/pages/BroadcastsPage.tsx:1221
 msgid "Completed"
@@ -3023,7 +3027,7 @@ msgstr "Conditions"
 #~ msgid "Conditions (all must match; none = always match)"
 #~ msgstr ""
 
-#: src/components/automations/NodeConfigPanel.tsx:165
+#: src/components/automations/NodeConfigPanel.tsx:176
 msgid "Configuration for {nodeType} is not available in Phase 2"
 msgstr "La configuration pour {nodeType} n est pas disponible en Phase 2"
 
@@ -3034,7 +3038,7 @@ msgstr "Configuration set"
 
 #: src/components/analytics/AnalyticsDashboard.tsx:166
 #: src/components/analytics/AnalyticsDashboard.tsx:190
-#: src/components/automations/NodeConfigPanel.tsx:176
+#: src/components/automations/NodeConfigPanel.tsx:187
 #: src/components/automations/nodes/ABTestNode.tsx:60
 #: src/components/automations/nodes/AddToListNode.tsx:54
 #: src/components/automations/nodes/DelayNode.tsx:20
@@ -4112,9 +4116,9 @@ msgstr "Par défaut : hôte SMTP"
 msgid "Define UTM parameters for links in your email for better campaign tracking."
 msgstr "Définissez les paramètres UTM pour les liens de votre email pour un meilleur suivi des campagnes."
 
-#: src/components/automations/AddNodeButton.tsx:76
+#: src/components/automations/AddNodeButton.tsx:77
 #: src/components/automations/nodes/DelayNode.tsx:45
-#: src/components/automations/nodes/StatNode.tsx:81
+#: src/components/automations/nodes/StatNode.tsx:83
 msgid "Delay"
 msgstr "Délai"
 
@@ -4435,7 +4439,7 @@ msgstr "Déploiement"
 msgid "Describe this image..."
 msgstr "Décrivez cette image..."
 
-#: src/components/automations/NodeConfigPanel.tsx:195
+#: src/components/automations/NodeConfigPanel.tsx:206
 #: src/components/blog/CategoryDrawer.tsx:155
 #: src/components/lists/ListDrawer.tsx:206
 #: src/components/transactional/UpsertTransactionalNotificationDrawer.tsx:330
@@ -4792,7 +4796,7 @@ msgstr "ex. achat"
 msgid "e.g., Raleway, Open Sans"
 msgstr "ex. Raleway, Open Sans"
 
-#: src/components/automations/NodeConfigPanel.tsx:209
+#: src/components/automations/NodeConfigPanel.tsx:220
 msgid "e.g., Welcome — day 1"
 msgstr "ex. Bienvenue — jour 1"
 
@@ -5023,10 +5027,10 @@ msgid "email"
 msgstr "email"
 
 #: src/components/analytics/NewContactsTable.tsx:67
-#: src/components/automations/AddNodeButton.tsx:77
+#: src/components/automations/AddNodeButton.tsx:78
 #: src/components/automations/config/TriggerConfigForm.tsx:97
 #: src/components/automations/nodes/EmailNode.tsx:49
-#: src/components/automations/nodes/StatNode.tsx:82
+#: src/components/automations/nodes/StatNode.tsx:84
 #: src/components/contacts/BulkUpdateDrawer.tsx:665
 #: src/components/contacts/ContactsCsvUploadDrawer.tsx:89
 #: src/components/contacts/ContactsCsvUploadDrawer.tsx:930
@@ -5803,9 +5807,9 @@ msgstr "échoué"
 #: src/components/analytics/EmailMetricsChart.tsx:286
 #: src/components/analytics/EmailMetricsChart.tsx:533
 #: src/components/automations/AutomationCard.tsx:281
-#: src/components/automations/nodes/StatNode.tsx:138
-#: src/components/automations/nodes/StatNode.tsx:200
-#: src/components/automations/nodes/StatNode.tsx:359
+#: src/components/automations/nodes/StatNode.tsx:141
+#: src/components/automations/nodes/StatNode.tsx:203
+#: src/components/automations/nodes/StatNode.tsx:362
 #: src/components/broadcasts/BroadcastStats.tsx:297
 #: src/components/contacts/BulkActionProgressModal.tsx:106
 #: src/components/contacts/BulkActionProgressModal.tsx:146
@@ -6439,10 +6443,10 @@ msgstr "Paramètres de stockage de fichiers"
 msgid "Fill in the fields of a hypothetical visit; empty fields count as empty values."
 msgstr "Renseignez les champs d'une visite hypothétique ; les champs vides comptent comme des valeurs vides."
 
-#: src/components/automations/AddNodeButton.tsx:78
+#: src/components/automations/AddNodeButton.tsx:79
 #: src/components/automations/nodes/FilterNode.tsx:48
-#: src/components/automations/nodes/StatNode.tsx:84
-#: src/components/automations/nodes/StatNode.tsx:182
+#: src/components/automations/nodes/StatNode.tsx:86
+#: src/components/automations/nodes/StatNode.tsx:185
 msgid "Filter"
 msgstr "Filtrer"
 
@@ -7351,6 +7355,12 @@ msgstr "dans les derniers"
 msgid "in the payload."
 msgstr "dans le payload."
 
+#: src/components/automations/AddNodeButton.tsx:85
+#: src/components/automations/nodes/NovuMessageNode.tsx:45
+#: src/components/automations/nodes/StatNode.tsx:91
+msgid "In-app / push message"
+msgstr ""
+
 #: src/components/settings/Integrations.tsx:236
 msgid "inbound replies"
 msgstr "réponses entrantes"
@@ -7377,10 +7387,10 @@ msgstr "Indexer et suivre les liens"
 msgid "Index, but don't follow links"
 msgstr "Indexer, mais ne pas suivre les liens"
 
-#: src/components/automations/nodes/StatNode.tsx:127
-#: src/components/automations/nodes/StatNode.tsx:190
-#: src/components/automations/nodes/StatNode.tsx:259
-#: src/components/automations/nodes/StatNode.tsx:348
+#: src/components/automations/nodes/StatNode.tsx:130
+#: src/components/automations/nodes/StatNode.tsx:193
+#: src/components/automations/nodes/StatNode.tsx:262
+#: src/components/automations/nodes/StatNode.tsx:351
 msgid "Inflight"
 msgstr "En cours"
 
@@ -8057,10 +8067,10 @@ msgstr "Lister les segments avec l'intégralité de leurs arbres de définition"
 msgid "List sent messages with their recipient address, delivery and engagement timestamps, and the data each was rendered with"
 msgstr "Lister les messages envoyés avec l'adresse de leur destinataire, les horodatages de livraison et d'engagement, et les données avec lesquelles chacun a été rendu"
 
-#: src/components/automations/AddNodeButton.tsx:80
+#: src/components/automations/AddNodeButton.tsx:81
 #: src/components/automations/nodes/ListStatusBranchNode.tsx:38
-#: src/components/automations/nodes/StatNode.tsx:89
-#: src/components/automations/nodes/StatNode.tsx:251
+#: src/components/automations/nodes/StatNode.tsx:92
+#: src/components/automations/nodes/StatNode.tsx:254
 #: src/components/contacts/ExportContactsModal.tsx:85
 #: src/pages/ContactsPage.tsx:395
 msgid "List Status"
@@ -8201,7 +8211,7 @@ msgstr "Chargement de l historique des messages..."
 msgid "Loading setup..."
 msgstr "Chargement de la configuration..."
 
-#: src/components/automations/AutomationFlowViewer.tsx:237
+#: src/components/automations/AutomationFlowViewer.tsx:238
 msgid "Loading stats..."
 msgstr "Chargement des statistiques..."
 
@@ -8220,6 +8230,10 @@ msgstr "Chargement des événements webhook..."
 #: src/components/settings/Integrations.tsx:252
 msgid "Loading webhook status..."
 msgstr "Chargement du statut webhook..."
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:100
+msgid "Loading workflows..."
+msgstr ""
 
 #: src/components/blog_editor/NotifuseEditor.tsx:480
 #: src/components/messages/MessageHistoryTab.tsx:597
@@ -8553,7 +8567,7 @@ msgstr "min"
 msgid "Minimal"
 msgstr "Minimal"
 
-#: src/components/automations/AutomationFlowEditor.tsx:436
+#: src/components/automations/AutomationFlowEditor.tsx:437
 msgid "Minimap"
 msgstr "Minimap"
 
@@ -8897,6 +8911,10 @@ msgstr "Pas de contenu {0} à prévisualiser"
 msgid "No Access"
 msgstr "Pas d accès"
 
+#: src/components/automations/config/NovuMessageConfigForm.tsx:100
+msgid "No active workflows"
+msgstr ""
+
 #: src/components/web_analytics/annotations/AnnotationTable.tsx:106
 #: src/components/web_analytics/annotations/AnnotationTable.tsx:171
 msgid "No annotations yet"
@@ -9115,7 +9133,7 @@ msgstr "Pas de contenu MJML à exporter"
 msgid "No name"
 msgstr "Pas de nom"
 
-#: src/components/automations/AutomationFlowViewer.tsx:245
+#: src/components/automations/AutomationFlowViewer.tsx:246
 msgid "No nodes in this automation"
 msgstr "Aucun nœud dans cette automation"
 
@@ -9283,7 +9301,7 @@ msgstr "Nœuds"
 
 #: src/components/automations/config/ListStatusBranchConfigForm.tsx:51
 #: src/components/automations/nodes/ListStatusBranchNode.tsx:61
-#: src/components/automations/nodes/StatNode.tsx:275
+#: src/components/automations/nodes/StatNode.tsx:278
 msgid "Non-Active"
 msgstr "Non actif"
 
@@ -9353,7 +9371,7 @@ msgstr "pas dans"
 
 #: src/components/automations/config/ListStatusBranchConfigForm.tsx:45
 #: src/components/automations/nodes/ListStatusBranchNode.tsx:59
-#: src/components/automations/nodes/StatNode.tsx:273
+#: src/components/automations/nodes/StatNode.tsx:276
 msgid "Not in List"
 msgstr "Pas dans la liste"
 
@@ -11160,9 +11178,9 @@ msgstr "Supprimer le champ"
 msgid "Remove from list"
 msgstr "Retirer de la liste"
 
-#: src/components/automations/AddNodeButton.tsx:82
+#: src/components/automations/AddNodeButton.tsx:83
 #: src/components/automations/nodes/RemoveFromListNode.tsx:39
-#: src/components/automations/nodes/StatNode.tsx:86
+#: src/components/automations/nodes/StatNode.tsx:88
 msgid "Remove from List"
 msgstr "Retirer de la liste"
 
@@ -11211,7 +11229,7 @@ msgstr "Rendu de l aperçu..."
 msgid "Renew licence"
 msgstr "Renouveler la licence"
 
-#: src/components/automations/AutomationFlowEditor.tsx:424
+#: src/components/automations/AutomationFlowEditor.tsx:425
 msgid "Reorganize layout"
 msgstr "Réorganiser la disposition"
 
@@ -11916,6 +11934,7 @@ msgid "Segments"
 msgstr "Segments"
 
 #: src/components/automations/nodes/EmailNode.tsx:66
+#: src/components/automations/nodes/NovuMessageNode.tsx:57
 #: src/components/file_manager/fileManager.tsx:976
 #: src/components/settings/BlogSettings.tsx:360
 #: src/components/settings/BlogSettings.tsx:376
@@ -11963,7 +11982,7 @@ msgstr "Sélectionner un champ"
 msgid "Select a list"
 msgstr "Sélectionner une liste"
 
-#: src/components/automations/AddNodeButton.tsx:118
+#: src/components/automations/AddNodeButton.tsx:120
 #: src/components/automations/NodePalette.tsx:40
 msgid "Select a list to enable email nodes"
 msgstr "Sélectionnez une liste pour activer les nœuds email"
@@ -11998,6 +12017,10 @@ msgstr "Sélectionner un modèle"
 #: src/components/segment/button_upsert.tsx:578
 msgid "Select a time zone"
 msgstr "Sélectionner un fuseau horaire"
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:89
+msgid "Select a workflow..."
+msgstr ""
 
 #: src/components/settings/WebhooksSettings.tsx:300
 msgid "Select all"
@@ -12685,6 +12708,11 @@ msgstr "Afficher plus ({0} restants)"
 #: src/components/broadcasts/BroadcastLinkStats.tsx:200
 msgid "Showing the top 200 links by unique clicks."
 msgstr "Affichage des 200 premiers liens par clics uniques."
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:109
+#: src/components/automations/config/NovuMessageConfigForm.tsx:124
+#~ msgid "Shown by workflows that use the flow's text (e.g. CRM · Message)"
+#~ msgstr ""
 
 #: src/pages/SignInPage.tsx:244
 msgid "Sign In"
@@ -13802,6 +13830,10 @@ msgstr "Le fournisseur d'email marketing n'a aucun expéditeur à partir duquel 
 #~ msgid "The name {prefix} is already taken on this Notifuse installation. Please pick another one."
 #~ msgstr "Le nom {prefix} est déjà utilisé sur cette installation Notifuse. Veuillez en choisir un autre."
 
+#: src/components/automations/config/NovuMessageConfigForm.tsx:63
+msgid "The Novu workflow that sends the in-app message and web push"
+msgstr ""
+
 #: src/services/api/permissions.ts:694
 msgid "The outbound message log: every email the workspace sent, its delivery status, and the engagement counted against it."
 msgstr "Le journal des messages sortants : chaque email envoyé par l'espace de travail, son statut de livraison et l'engagement comptabilisé pour lui."
@@ -13868,7 +13900,7 @@ msgid "The user_metadata field in Supabase will be saved to this custom JSON fie
 msgstr "Le champ user_metadata dans Supabase sera enregistré dans ce champ JSON personnalisé"
 
 #: src/components/automations/config/WebhookConfigForm.tsx:36
-#: src/components/automations/utils/flowConverter.ts:543
+#: src/components/automations/utils/flowConverter.ts:559
 msgid "The webhook URL points at a private or internal address ({host}), which Notifuse does not connect to. Use a public URL, or set WEBHOOK_DELIVERY_ALLOW_PRIVATE_HOSTS=true on a self-hosted install that delivers to its own network."
 msgstr "L'URL du webhook pointe vers une adresse privée ou interne ({host}), à laquelle Notifuse ne se connecte pas. Utilisez une URL publique, ou définissez WEBHOOK_DELIVERY_ALLOW_PRIVATE_HOSTS=true sur une installation auto-hébergée qui envoie vers son propre réseau."
 
@@ -13879,6 +13911,10 @@ msgstr "Le webhook cessera de recevoir des événements."
 #: src/components/automations/config/ConditionsField.tsx:117
 msgid "The whole condition tree will be deleted."
 msgstr "L'ensemble de l'arbre de conditions sera supprimé."
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:71
+msgid "The workflow list is unavailable"
+msgstr ""
 
 #: src/components/broadcasts/SendVariationTestModal.tsx:112
 msgid "The workspace has no marketing email provider, so there is nothing to send the test through"
@@ -14241,6 +14277,10 @@ msgstr "Cela enverra un vrai email de test à l'adresse fournie."
 msgid "This will set the value to NULL. Are you sure?"
 msgstr "Cela définira la valeur à NULL. Êtes-vous sûr ?"
 
+#: src/components/automations/config/NovuMessageConfigForm.tsx:62
+msgid "This workflow is not among the bridge's active workflows"
+msgstr ""
+
 #: src/components/logs/AuditLogsTab.tsx:64
 msgid "This workspace"
 msgstr "Ce workspace"
@@ -14359,6 +14399,7 @@ msgstr "Conseils pour un texte d'aperçu efficace :"
 msgid "Tips for fixing these errors:"
 msgstr "Conseils pour corriger ces erreurs :"
 
+#: src/components/automations/config/NovuMessageConfigForm.tsx:106
 #: src/components/blog/PostDrawer.tsx:800
 #: src/components/blog/PostsTable.tsx:193
 #: src/components/email_builder/blocks/MjSocialElementBlock.tsx:408
@@ -14367,6 +14408,10 @@ msgstr "Conseils pour corriger ces erreurs :"
 #: src/components/web_analytics/annotations/AnnotationFormModal.tsx:182
 msgid "Title"
 msgstr "Titre"
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:109
+msgid "Title and body are shown by workflows that use the flow's text, such as CRM message"
+msgstr ""
 
 #: src/components/web_analytics/annotations/AnnotationFormModal.tsx:184
 msgid "Title is required"
@@ -14643,9 +14688,9 @@ msgstr "Transparent"
 msgid "Trial"
 msgstr "Essai"
 
-#: src/components/automations/AddNodeButton.tsx:75
+#: src/components/automations/AddNodeButton.tsx:76
 #: src/components/automations/AutomationCard.tsx:294
-#: src/components/automations/nodes/StatNode.tsx:80
+#: src/components/automations/nodes/StatNode.tsx:82
 #: src/components/automations/nodes/TriggerNode.tsx:60
 msgid "Trigger"
 msgstr "Déclencheur"
@@ -15427,8 +15472,8 @@ msgstr "Paramètres d'analyse web mis à jour avec succès"
 msgid "Web session"
 msgstr "Session web"
 
-#: src/components/automations/AddNodeButton.tsx:83
-#: src/components/automations/nodes/StatNode.tsx:88
+#: src/components/automations/AddNodeButton.tsx:84
+#: src/components/automations/nodes/StatNode.tsx:90
 #: src/components/automations/nodes/WebhookNode.tsx:47
 #: src/components/timeline/ContactTimeline.tsx:731
 msgid "Webhook"
@@ -15700,6 +15745,14 @@ msgstr "avec statut"
 #: src/components/web_analytics/explore/ExploreTemplates.tsx:129
 msgid "With:"
 msgstr "Avec :"
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:58
+msgid "Workflow"
+msgstr ""
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:80
+msgid "Workflow id"
+msgstr ""
 
 #: src/components/settings/audit_logs/AuditLogDetailsDrawer.tsx:109
 #: src/components/settings/audit_logs/AuditLogTable.tsx:248

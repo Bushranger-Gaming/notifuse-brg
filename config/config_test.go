@@ -150,6 +150,66 @@ func TestLoad_WebhookDeliverySSRFProtectionDefault(t *testing.T) {
 	})
 }
 
+func TestLoad_NovuBridge(t *testing.T) {
+	// SECRET_KEY is required for the config to load successfully.
+	_ = os.Setenv("SECRET_KEY", "test-secret-key-1234567890123456")
+	defer func() { _ = os.Unsetenv("SECRET_KEY") }()
+
+	unsetBridge := func() {
+		_ = os.Unsetenv("BRG_NOVU_BRIDGE_URL")
+		_ = os.Unsetenv("BRG_NOVU_BRIDGE_SECRET")
+	}
+	defer unsetBridge()
+
+	t.Run("unset means not configured", func(t *testing.T) {
+		unsetBridge()
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.Empty(t, cfg.NovuBridge.URL)
+		assert.Empty(t, cfg.NovuBridge.Secret)
+		assert.False(t, cfg.NovuBridge.Configured())
+	})
+
+	t.Run("read from the environment", func(t *testing.T) {
+		unsetBridge()
+		_ = os.Setenv("BRG_NOVU_BRIDGE_URL", "  http://bridge:8090  ")
+		_ = os.Setenv("BRG_NOVU_BRIDGE_SECRET", "s3cret")
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "http://bridge:8090", cfg.NovuBridge.URL)
+		assert.Equal(t, "s3cret", cfg.NovuBridge.Secret)
+		assert.True(t, cfg.NovuBridge.Configured())
+	})
+
+	t.Run("needs both the address and the secret", func(t *testing.T) {
+		unsetBridge()
+		_ = os.Setenv("BRG_NOVU_BRIDGE_URL", "http://bridge:8090")
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.False(t, cfg.NovuBridge.Configured())
+
+		unsetBridge()
+		_ = os.Setenv("BRG_NOVU_BRIDGE_SECRET", "s3cret")
+		cfg, err = LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.False(t, cfg.NovuBridge.Configured())
+	})
+
+	t.Run("independent of the webhook private-host opt-out", func(t *testing.T) {
+		unsetBridge()
+		_ = os.Setenv("BRG_NOVU_BRIDGE_URL", "http://bridge:8090")
+		_ = os.Setenv("BRG_NOVU_BRIDGE_SECRET", "s3cret")
+		_ = os.Unsetenv("WEBHOOK_DELIVERY_ALLOW_PRIVATE_HOSTS")
+
+		cfg, err := LoadWithOptions(LoadOptions{})
+		require.NoError(t, err)
+		assert.False(t, cfg.Webhook.AllowPrivateDeliveryHosts,
+			"pointing novu_message nodes at the bridge must not relax the guard on webhook nodes")
+	})
+}
+
 func TestInvalidKeysHandling(t *testing.T) {
 	t.Run("missing_secret_key", func(t *testing.T) {
 		// Clear any existing environment variables

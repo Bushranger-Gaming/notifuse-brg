@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 //go:generate mockgen -destination mocks/mock_automation_repository.go -package mocks github.com/Notifuse/notifuse/internal/domain AutomationRepository
@@ -93,6 +94,7 @@ const (
 	NodeTypeABTest           NodeType = "ab_test"
 	NodeTypeWebhook          NodeType = "webhook"
 	NodeTypeListStatusBranch NodeType = "list_status_branch"
+	NodeTypeNovuMessage      NodeType = "novu_message"
 )
 
 // IsValid checks if the node type is valid
@@ -100,7 +102,7 @@ func (t NodeType) IsValid() bool {
 	switch t {
 	case NodeTypeTrigger, NodeTypeDelay, NodeTypeEmail, NodeTypeBranch,
 		NodeTypeFilter, NodeTypeAddToList, NodeTypeRemoveFromList,
-		NodeTypeABTest, NodeTypeWebhook, NodeTypeListStatusBranch:
+		NodeTypeABTest, NodeTypeWebhook, NodeTypeListStatusBranch, NodeTypeNovuMessage:
 		return true
 	default:
 		return false
@@ -420,6 +422,14 @@ func (n *AutomationNode) Validate() error {
 					return fmt.Errorf("invalid add_to_list status: %s (must be %s or %s)", status, ContactListStatusActive, ContactListStatusPending)
 				}
 			}
+		}
+	}
+
+	// Same for novu_message: a value that can never be sent is refused when the flow is
+	// saved, a workflow not picked yet is left to runtime.
+	if n.Type == NodeTypeNovuMessage {
+		if err := validateNovuMessageDraft(n.Config); err != nil {
+			return err
 		}
 	}
 
@@ -808,6 +818,103 @@ func (c WebhookNodeConfig) Validate() error {
 	return nil
 }
 
+// Bounds of the text a novu_message node hands to the CRM bridge, which refuses anything longer.
+const (
+	MaxNovuMessageTitleLength = 200
+	MaxNovuMessageBodyLength  = 1000
+)
+
+// novuWorkflowIDPattern is what the CRM bridge accepts as a Novu workflow identifier.
+var novuWorkflowIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+
+// IsValidNovuWorkflowID reports whether id can name a Novu workflow of the CRM bridge.
+func IsValidNovuWorkflowID(id string) bool {
+	return novuWorkflowIDPattern.MatchString(id)
+}
+
+// NovuMessageNodeConfig configures a novu_message node: an in-app inbox message and web push
+// sent through a Novu workflow of the CRM bridge. The bridge address and secret are server
+// settings (BRG_NOVU_BRIDGE_URL, BRG_NOVU_BRIDGE_SECRET) and are never part of the flow.
+type NovuMessageNodeConfig struct {
+	NodeConfigDescription
+	WorkflowID string `json:"workflow_id"`
+	Title      string `json:"title,omitempty"` // shown by workflows that use the flow's text
+	Body       string `json:"body,omitempty"`  // shown by workflows that use the flow's text
+}
+
+// Validate validates the novu_message node config
+func (c NovuMessageNodeConfig) Validate() error {
+	if c.WorkflowID == "" {
+		return fmt.Errorf("workflow_id is required")
+	}
+	return validateNovuMessageFields(c.WorkflowID, c.Title, c.Body)
+}
+
+// validateNovuMessageFields checks the format of a workflow id and the length of the text.
+// An empty workflow id passes: callers that require one check that themselves.
+func validateNovuMessageFields(workflowID, title, body string) error {
+	if workflowID != "" && !IsValidNovuWorkflowID(workflowID) {
+		return fmt.Errorf("invalid workflow_id: %q (lowercase letters, digits and dashes, starting with a letter or digit, at most 64 characters)", workflowID)
+	}
+	if utf8.RuneCountInString(title) > MaxNovuMessageTitleLength {
+		return fmt.Errorf("title must be at most %d characters", MaxNovuMessageTitleLength)
+	}
+	if utf8.RuneCountInString(body) > MaxNovuMessageBodyLength {
+		return fmt.Errorf("body must be at most %d characters", MaxNovuMessageBodyLength)
+	}
+	return nil
+}
+
+// validateNovuMessageDraft is the save-time check of a novu_message node's config bag: the
+// values that are present must be well formed, and nothing is required, so a node still being
+// set up stays savable.
+func validateNovuMessageDraft(config map[string]interface{}) error {
+	workflowID, _ := config["workflow_id"].(string)
+	title, _ := config["title"].(string)
+	body, _ := config["body"].(string)
+	return validateNovuMessageFields(workflowID, title, body)
+}
+
+// NovuWorkflow is a Novu workflow of the CRM bridge that a novu_message node can send through.
+type NovuWorkflow struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// UsesText tells that the workflow shows the title and body of the flow's node.
+	UsesText bool `json:"uses_text"`
+}
+
+// NovuBridgeUnavailableError is returned when the CRM bridge cannot answer: not set up on this
+// server, unreachable, refusing the configured secret, or answering something unreadable. The
+// message is safe to show to the user and never carries the bridge secret.
+type NovuBridgeUnavailableError struct {
+	Message string
+}
+
+func (e *NovuBridgeUnavailableError) Error() string {
+	return e.Message
+}
+
+// NovuWorkflowsRequest is the query of automations.novuWorkflows.
+type NovuWorkflowsRequest struct {
+	WorkspaceID string `json:"workspace_id"`
+}
+
+// FromURLParams parses the request from URL parameters
+func (r *NovuWorkflowsRequest) FromURLParams(params map[string][]string) error {
+	if v, ok := params["workspace_id"]; ok && len(v) > 0 {
+		r.WorkspaceID = v[0]
+	}
+	return r.Validate()
+}
+
+// Validate validates the request
+func (r *NovuWorkflowsRequest) Validate() error {
+	if r.WorkspaceID == "" {
+		return fmt.Errorf("workspace_id is required")
+	}
+	return nil
+}
+
 // AutomationFilter defines filtering options for listing automations
 type AutomationFilter struct {
 	Status         []AutomationStatus
@@ -921,6 +1028,10 @@ type AutomationService interface {
 
 	// Node executions/debugging
 	GetContactNodeExecutions(ctx context.Context, workspaceID, automationID, email string) (*ContactAutomation, []*NodeExecution, error)
+
+	// ListNovuWorkflows lists the Novu workflows of the CRM bridge that a novu_message node can
+	// send through. It returns *NovuBridgeUnavailableError when the bridge cannot answer.
+	ListNovuWorkflows(ctx context.Context, workspaceID string) ([]NovuWorkflow, error)
 }
 
 // HTTP Request/Response types for automation API

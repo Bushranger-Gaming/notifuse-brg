@@ -44,6 +44,9 @@ func (h *AutomationHandler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Node executions/debugging
 	mux.Handle("/api/automations.nodeExecutions", requireAuth(http.HandlerFunc(h.handleGetContactNodeExecutions)))
+
+	// Workflows of the CRM bridge a novu_message node can send through
+	mux.Handle("/api/automations.novuWorkflows", requireAuth(http.HandlerFunc(h.handleNovuWorkflows)))
 }
 
 func (h *AutomationHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -137,6 +140,44 @@ func (h *AutomationHandler) handleList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"automations": automations,
 		"total":       total,
+	})
+}
+
+// handleNovuWorkflows answers the Novu workflows of the CRM bridge, which fill the workflow
+// picker of a novu_message node. A bridge that is not set up or cannot answer is a 503 that says
+// so, so the console can tell the author and still let them type a workflow id.
+func (h *AutomationHandler) handleNovuWorkflows(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req domain.NovuWorkflowsRequest
+	if err := req.FromURLParams(r.URL.Query()); err != nil {
+		WriteJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	workflows, err := h.service.ListNovuWorkflows(r.Context(), req.WorkspaceID)
+	if err != nil {
+		if writePermissionError(w, err) {
+			return
+		}
+		var unavailable *domain.NovuBridgeUnavailableError
+		if errors.As(err, &unavailable) {
+			WriteJSONError(w, unavailable.Message, http.StatusServiceUnavailable)
+			return
+		}
+		h.logger.WithField("error", err.Error()).Error("Failed to list Novu workflows")
+		WriteJSONError(w, "Failed to list Novu workflows", http.StatusInternalServerError)
+		return
+	}
+	if workflows == nil {
+		workflows = []domain.NovuWorkflow{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"workflows": workflows,
 	})
 }
 

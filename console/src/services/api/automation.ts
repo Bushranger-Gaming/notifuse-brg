@@ -66,6 +66,7 @@ export type NodeType =
   | 'ab_test'
   | 'webhook'
   | 'list_status_branch'
+  | 'novu_message'
 
 // Contact automation status
 export type ContactAutomationStatus = 'active' | 'completed' | 'exited' | 'failed'
@@ -201,6 +202,15 @@ export interface WebhookNodeConfig extends NodeConfigBase {
   secret?: string // Optional Authorization Bearer token
 }
 
+// An in-app inbox message and web push, sent through a Novu workflow of the CRM bridge. The bridge
+// address and secret are server settings and never part of the flow. Title and body are shown by
+// the workflows that use the flow's text (see NovuWorkflow.uses_text).
+export interface NovuMessageNodeConfig extends NodeConfigBase {
+  workflow_id: string
+  title?: string // at most 200 characters
+  body?: string // at most 1000 characters
+}
+
 // Union type for node configs
 export type NodeConfig =
   | DelayNodeConfig
@@ -212,6 +222,7 @@ export type NodeConfig =
   | ListStatusBranchNodeConfig
   | ABTestNodeConfig
   | WebhookNodeConfig
+  | NovuMessageNodeConfig
   | Record<string, unknown> // For trigger nodes with no config
 
 // Automation node
@@ -352,6 +363,22 @@ export interface GetNodeStatsResponse {
   node_stats: Record<string, AutomationNodeStats>
 }
 
+// A Novu workflow of the CRM bridge a novu_message node can send through
+export interface NovuWorkflow {
+  id: string
+  name: string
+  // The workflow shows the title and body of the flow's node
+  uses_text: boolean
+}
+
+export interface ListNovuWorkflowsResponse {
+  workflows: NovuWorkflow[]
+}
+
+// Limits the CRM bridge applies to the text of a novu_message node
+export const NOVU_MESSAGE_TITLE_MAX_LENGTH = 200
+export const NOVU_MESSAGE_BODY_MAX_LENGTH = 1000
+
 // API client
 export const automationApi = {
   list: async (params: ListAutomationsRequest): Promise<ListAutomationsResponse> => {
@@ -393,6 +420,15 @@ export const automationApi = {
 
   pause: async (params: PauseAutomationRequest): Promise<GetAutomationResponse> => {
     return api.post<GetAutomationResponse>('/api/automations.pause', params)
+  },
+
+  // The Novu workflows of the CRM bridge. Answers 503 with a message when the bridge is not set up
+  // on the server or cannot be reached.
+  listNovuWorkflows: async (workspaceId: string): Promise<ListNovuWorkflowsResponse> => {
+    const searchParams = new URLSearchParams()
+    searchParams.append('workspace_id', workspaceId)
+
+    return api.get<ListNovuWorkflowsResponse>(`/api/automations.novuWorkflows?${searchParams.toString()}`)
   },
 
   getNodeExecutions: async (params: GetNodeExecutionsRequest): Promise<GetNodeExecutionsResponse> => {

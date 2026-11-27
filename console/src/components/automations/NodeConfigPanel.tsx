@@ -12,6 +12,7 @@ import {
   RemoveFromListConfigForm,
   FilterConfigForm,
   WebhookConfigForm,
+  NovuMessageConfigForm,
   ListStatusBranchConfigForm
 } from './config'
 import { useAutomation } from './context'
@@ -24,6 +25,7 @@ import type {
   RemoveFromListNodeConfig,
   FilterNodeConfig,
   WebhookNodeConfig,
+  NovuMessageNodeConfig,
   ListStatusBranchNodeConfig
 } from '../../services/api/automation'
 import type { TreeNode } from '../../services/api/segment'
@@ -55,6 +57,7 @@ type NodeConfigUpdate =
   | Structural<RemoveFromListNodeConfig>
   | Structural<FilterNodeConfig>
   | Structural<WebhookNodeConfig>
+  | Structural<NovuMessageNodeConfig>
   | Structural<ListStatusBranchNodeConfig>
 
 interface NodeConfigPanelProps {
@@ -150,6 +153,14 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
           <WebhookConfigForm
             config={config as Structural<WebhookNodeConfig>}
             onChange={handleConfigChange}
+          />
+        )
+      case 'novu_message':
+        return (
+          <NovuMessageConfigForm
+            config={config as Structural<NovuMessageNodeConfig>}
+            onChange={handleConfigChange}
+            workspaceId={workspaceId}
           />
         )
       case 'list_status_branch':

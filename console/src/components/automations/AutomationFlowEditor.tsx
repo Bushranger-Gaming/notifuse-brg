@@ -18,7 +18,7 @@ import {
 import { LayoutGrid } from 'lucide-react'
 import { Tooltip } from 'antd'
 import { useLingui } from '@lingui/react/macro'
-import { TriggerNode, DelayNode, EmailNode, ABTestNode, AddToListNode, RemoveFromListNode, FilterNode, WebhookNode, ListStatusBranchNode } from './nodes'
+import { TriggerNode, DelayNode, EmailNode, ABTestNode, AddToListNode, RemoveFromListNode, FilterNode, WebhookNode, NovuMessageNode, ListStatusBranchNode } from './nodes'
 import { PlaceholderNode } from './nodes/PlaceholderNode'
 import { NodeConfigPanel } from './NodeConfigPanel'
 import { AddNodeEdge, type AddNodeEdgeData } from './edges/AddNodeEdge'
@@ -55,6 +55,7 @@ const nodeTypes: NodeTypes = {
   remove_from_list: RemoveFromListNode,
   filter: FilterNode,
   webhook: WebhookNode,
+  novu_message: NovuMessageNode,
   list_status_branch: ListStatusBranchNode,
   placeholder: PlaceholderNode
 }

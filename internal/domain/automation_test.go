@@ -63,6 +63,7 @@ func TestNodeType_IsValid(t *testing.T) {
 		{"add_to_list is valid", NodeTypeAddToList, true},
 		{"remove_from_list is valid", NodeTypeRemoveFromList, true},
 		{"ab_test is valid", NodeTypeABTest, true},
+		{"novu_message is valid", NodeTypeNovuMessage, true},
 		{"empty is invalid", NodeType(""), false},
 		{"unknown is invalid", NodeType("unknown"), false},
 	}
@@ -2086,6 +2087,7 @@ func TestNodeConfigDescription_JSONRoundTrip(t *testing.T) {
 	listStatus := &ListStatusBranchNodeConfig{}
 	abTest := &ABTestNodeConfig{}
 	webhook := &WebhookNodeConfig{}
+	novuMessage := &NovuMessageNodeConfig{}
 
 	tests := []struct {
 		name string
@@ -2103,6 +2105,7 @@ func TestNodeConfigDescription_JSONRoundTrip(t *testing.T) {
 		{"list_status_branch", listStatus, `{"description":%q,"list_id":"list123"}`, func() string { return listStatus.Description }, ListStatusBranchNodeConfig{}},
 		{"ab_test", abTest, `{"description":%q,"variants":[]}`, func() string { return abTest.Description }, ABTestNodeConfig{}},
 		{"webhook", webhook, `{"description":%q,"url":"https://example.com"}`, func() string { return webhook.Description }, WebhookNodeConfig{}},
+		{"novu_message", novuMessage, `{"description":%q,"workflow_id":"crm-message"}`, func() string { return novuMessage.Description }, NovuMessageNodeConfig{}},
 	}
 
 	for _, tt := range tests {
