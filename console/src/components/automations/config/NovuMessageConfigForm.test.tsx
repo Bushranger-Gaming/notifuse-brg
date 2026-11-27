@@ -32,7 +32,7 @@ vi.mock('../hooks/useNovuWorkflows', () => ({
 const CRM_MESSAGE: NovuWorkflow = { id: 'crm-message', name: 'CRM · Message', uses_text: true }
 const CRM_WELCOME: NovuWorkflow = { id: 'crm-welcome-inapp', name: 'CRM · Welcome', uses_text: false }
 
-const HELP = "Shown by workflows that use the flow's text (e.g. CRM · Message)"
+const HELP = "Title and body are shown by workflows that use the flow's text, such as CRM message"
 
 beforeEach(() => {
   workflowsState = { workflows: [CRM_MESSAGE, CRM_WELCOME], isLoading: false, error: null }
@@ -207,7 +207,7 @@ describe('NovuMessageConfigForm', () => {
 
       expect(screen.getByLabelText('Title')).toBeInTheDocument()
       expect(screen.getByLabelText('Body')).toBeInTheDocument()
-      expect(screen.getAllByText(HELP)).toHaveLength(2)
+      expect(screen.getAllByText(HELP)).toHaveLength(1)
     })
 
     it('are shown before any workflow is chosen', () => {

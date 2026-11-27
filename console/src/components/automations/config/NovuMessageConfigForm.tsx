@@ -106,7 +106,7 @@ export const NovuMessageConfigForm: React.FC<NovuMessageConfigFormProps> = ({
         label={t`Title`}
         htmlFor="novu-title"
         required={textRequired}
-        extra={t`Shown by workflows that use the flow's text (e.g. CRM · Message)`}
+        extra={t`Title and body are shown by workflows that use the flow's text, such as CRM message`}
       >
         <Input
           id="novu-title"
@@ -121,7 +121,6 @@ export const NovuMessageConfigForm: React.FC<NovuMessageConfigFormProps> = ({
         label={t`Body`}
         htmlFor="novu-body"
         required={textRequired}
-        extra={t`Shown by workflows that use the flow's text (e.g. CRM · Message)`}
       >
         <Input.TextArea
           id="novu-body"

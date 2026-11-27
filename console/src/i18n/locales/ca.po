@@ -12711,8 +12711,8 @@ msgstr "Es mostren els 200 enllaços principals per clics únics."
 
 #: src/components/automations/config/NovuMessageConfigForm.tsx:109
 #: src/components/automations/config/NovuMessageConfigForm.tsx:124
-msgid "Shown by workflows that use the flow's text (e.g. CRM · Message)"
-msgstr ""
+#~ msgid "Shown by workflows that use the flow's text (e.g. CRM · Message)"
+#~ msgstr ""
 
 #: src/pages/SignInPage.tsx:244
 msgid "Sign In"
@@ -14408,6 +14408,10 @@ msgstr "Consells per solucionar aquests errors:"
 #: src/components/web_analytics/annotations/AnnotationFormModal.tsx:182
 msgid "Title"
 msgstr "Títol"
+
+#: src/components/automations/config/NovuMessageConfigForm.tsx:109
+msgid "Title and body are shown by workflows that use the flow's text, such as CRM message"
+msgstr ""
 
 #: src/components/web_analytics/annotations/AnnotationFormModal.tsx:184
 msgid "Title is required"
